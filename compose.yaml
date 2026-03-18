@@ -44,7 +44,7 @@ services:
       context: .
       dockerfile: docker/egress-proxy/Dockerfile
     environment:
-      SQUID_ALLOWED_DOMAINS: ${SQUID_ALLOWED_DOMAINS:-api.openai.com files.oaiusercontent.com deb.debian.org security.debian.org registry.npmjs.org pypi.org files.pythonhosted.org crates.io index.crates.io static.crates.io bun.com bun.sh}
+      SQUID_ALLOWED_DOMAINS: ${SQUID_ALLOWED_DOMAINS:-api.openai.com chatgpt.com auth.openai.com files.oaiusercontent.com deb.debian.org security.debian.org registry.npmjs.org pypi.org files.pythonhosted.org crates.io index.crates.io static.crates.io bun.com bun.sh}
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m

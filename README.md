@@ -135,6 +135,8 @@ The `egress-proxy` service is the only container with outbound access. It accept
 The starter allowlist is intentionally small:
 
 - `api.openai.com`
+- `chatgpt.com`
+- `auth.openai.com`
 - `files.oaiusercontent.com`
 - `deb.debian.org`
 - `security.debian.org`
@@ -147,10 +149,12 @@ The starter allowlist is intentionally small:
 - `bun.com`
 - `bun.sh`
 
-This is now a practical starter set for OpenAI access plus common package installation flows in Debian, npm, pip, Cargo, and Bun.
+This is now a practical starter set for ChatGPT-authenticated Codex/OpenAI access plus common package installation flows in Debian, npm, pip, Cargo, and Bun.
 
 Notes:
 
+- `chatgpt.com` is needed for ChatGPT-authenticated Codex traffic. If you log in with ChatGPT rather than an API key, this host is part of the normal control path.
+- `auth.openai.com` is included for token/auth flows associated with ChatGPT-style login.
 - `bun install` uses `registry.npmjs.org` by default, so Bun package installs are already covered by the npm registry entry.
 - `bun.com` and `bun.sh` are included for installing the Bun runtime itself.
 - `crates.io`, `index.crates.io`, and `static.crates.io` cover the common Cargo crates.io flow. `static.crates.io` is included defensively because crate downloads may be served from that host.
@@ -161,6 +165,7 @@ If you later need git dependencies, private registries, or language-specific mir
 
 - This design assumes the agent runtime honors `HTTP_PROXY` / `HTTPS_PROXY`.
 - ChatGPT login reuse is practical for Codex-style tooling, but ordinary OpenAI API client libraries still expect API credentials rather than a ChatGPT web login.
+- A ChatGPT-authenticated Codex session still cannot inspect arbitrary external websites unless those sites are also on the allowlist or you adopt a broader browsing policy.
 - `./alcatraz run` refuses to start from a dirty checkout unless you pass `--allow-dirty`, because worktrees are created from committed git state.
 - If you want package installation, prefer internal mirrors for npm, PyPI, crates, apt, and git hosting rather than opening general outbound access.
 - Do not mount the host Docker socket into the agent container.
