@@ -291,7 +291,7 @@ EOF
     done < <(compose_files "$auth_mode")
 
     log "starting isolated runtime for $branch_name"
-    docker compose "${compose_args[@]}" up -d egress-proxy >/dev/null
+    docker compose "${compose_args[@]}" up -d --build egress-proxy >/dev/null
 
     local codex_command=(
         codex
@@ -302,7 +302,7 @@ EOF
         codex_command+=("${codex_args[@]}")
     fi
 
-    docker compose "${compose_args[@]}" run --rm --no-deps agent "${codex_command[@]}"
+    docker compose "${compose_args[@]}" run --rm --no-deps --build agent "${codex_command[@]}"
 
     trap - EXIT INT TERM
     cleanup
