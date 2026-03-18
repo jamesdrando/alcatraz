@@ -125,6 +125,23 @@ resolve_codex_bin() {
         return
     fi
 
+    local candidates=()
+    local candidate=""
+
+    shopt -s nullglob
+    for candidate in \
+        "$HOME"/.vscode-server/extensions/openai.chatgpt-*/bin/linux-x86_64/codex \
+        "$HOME"/.vscode/extensions/openai.chatgpt-*/bin/linux-x86_64/codex
+    do
+        [[ -x "$candidate" ]] && candidates+=("$candidate")
+    done
+    shopt -u nullglob
+
+    if [[ ${#candidates[@]} -gt 0 ]]; then
+        printf '%s\n' "${candidates[-1]}"
+        return
+    fi
+
     die "could not find a local codex binary; set HOST_CODEX_BIN explicitly"
 }
 
