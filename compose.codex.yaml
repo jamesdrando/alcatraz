@@ -1,0 +1,4 @@
+services:
+  agent:
+    volumes:
+      - ${HOST_CODEX_BIN:?set HOST_CODEX_BIN when running alcatraz}:/usr/local/bin/codex:ro

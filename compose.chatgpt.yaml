@@ -1,0 +1,4 @@
+services:
+  agent:
+    volumes:
+      - ${HOST_CODEX_HOME:?set HOST_CODEX_HOME in .env}:/seed-codex:ro

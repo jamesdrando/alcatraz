@@ -1,0 +1,5 @@
+.env
+.alcatraz/config.env
+.alcatraz/logs/
+.alcatraz/state/
+.alcatraz/worktrees/

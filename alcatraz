@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage:
+  alcatraz init
+  alcatraz run [alcatraz-options] [-- codex-args...]
+  alcatraz help
+
+Commands:
+  init            Create repo-local .alcatraz state and a starter .env if needed
+  run             Create an isolated git worktree, start the container, and launch Codex inside it
+  help            Show this message
+
+Run options:
+  --base-ref REF      Create the agent branch from REF instead of HEAD
+  --branch-name NAME  Use a specific branch name instead of an auto-generated one
+  --allow-dirty       Allow creating the worktree even if the current checkout has uncommitted changes
+
+Examples:
+  ./alcatraz init
+  ./alcatraz run
+  ./alcatraz run -- "Fix the failing tests"
+  ./alcatraz run --base-ref main -- --no-alt-screen
+EOF
+}
+
+log() {
+    printf '[alcatraz] %s\n' "$*"
+}
+
+die() {
+    printf '[alcatraz] %s\n' "$*" >&2
+    exit 1
+}
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+repo_root() {
+    git rev-parse --show-toplevel 2>/dev/null || die "must be run inside a git repository"
+}
+
+load_repo_config() {
+    local root="$1"
+    local config_file="$root/.alcatraz/config.env"
+    if [[ -f "$config_file" ]]; then
+        # shellcheck disable=SC1090
+        source "$config_file"
+    fi
+}
+
+load_dotenv() {
+    local root="$1"
+    local dotenv_file="$root/.env"
+    if [[ -f "$dotenv_file" ]]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "$dotenv_file"
+        set +a
+    fi
+}
+
+ensure_layout() {
+    local root="$1"
+    mkdir -p \
+        "$root/.alcatraz" \
+        "$root/.alcatraz/worktrees" \
+        "$root/.alcatraz/logs" \
+        "$root/.alcatraz/state"
+
+    if [[ ! -f "$root/.alcatraz/config.env" ]]; then
+        cat >"$root/.alcatraz/config.env" <<'EOF'
+ALCATRAZ_BRANCH_PREFIX=alcatraz
+ALCATRAZ_COMPOSE_PREFIX=alcatraz
+EOF
+    fi
+
+    if [[ ! -f "$root/.env" && -f "$root/.env.example" ]]; then
+        local host_codex_home="$HOME/.codex"
+        sed "s|^HOST_CODEX_HOME=.*$|HOST_CODEX_HOME=$host_codex_home|" \
+            "$root/.env.example" >"$root/.env"
+    fi
+}
+
+ensure_clean_checkout() {
+    local root="$1"
+    local status
+    status="$(git -C "$root" status --porcelain)"
+    [[ -z "$status" ]] || die "working tree is not clean; commit or stash changes first, or rerun with --allow-dirty"
+}
+
+random_suffix() {
+    od -An -N2 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+resolve_codex_bin() {
+    if [[ -n "${HOST_CODEX_BIN:-}" ]]; then
+        [[ -x "$HOST_CODEX_BIN" ]] || die "HOST_CODEX_BIN is not executable: $HOST_CODEX_BIN"
+        printf '%s\n' "$HOST_CODEX_BIN"
+        return
+    fi
+
+    if command -v codex >/dev/null 2>&1; then
+        command -v codex
+        return
+    fi
+
+    die "could not find a local codex binary; set HOST_CODEX_BIN explicitly"
+}
+
+resolve_auth_mode() {
+    if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+        printf 'api-key\n'
+        return
+    fi
+
+    local host_codex_home="${HOST_CODEX_HOME:-$HOME/.codex}"
+    if [[ -f "$host_codex_home/auth.json" ]]; then
+        HOST_CODEX_HOME="$host_codex_home"
+        export HOST_CODEX_HOME
+        printf 'chatgpt\n'
+        return
+    fi
+
+    die "no auth configured; set OPENAI_API_KEY or point HOST_CODEX_HOME at a logged-in .codex directory"
+}
+
+compose_files() {
+    local auth_mode="$1"
+    local files=(
+        "compose.yaml"
+        "compose.codex.yaml"
+    )
+
+    if [[ "$auth_mode" == "chatgpt" ]]; then
+        files+=("compose.chatgpt.yaml")
+    fi
+
+    printf '%s\n' "${files[@]}"
+}
+
+run_init() {
+    require_cmd git
+
+    local root
+    root="$(repo_root)"
+
+    ensure_layout "$root"
+    log "initialized $root/.alcatraz"
+    if [[ -f "$root/.env" ]]; then
+        log "using $root/.env"
+    fi
+}
+
+run_agent() {
+    require_cmd git
+    require_cmd docker
+    require_cmd bash
+
+    local root
+    root="$(repo_root)"
+
+    ensure_layout "$root"
+    load_repo_config "$root"
+    load_dotenv "$root"
+
+    local base_ref="HEAD"
+    local branch_name=""
+    local allow_dirty="0"
+    local codex_args=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --base-ref)
+                [[ $# -ge 2 ]] || die "--base-ref requires a value"
+                base_ref="$2"
+                shift 2
+                ;;
+            --branch-name)
+                [[ $# -ge 2 ]] || die "--branch-name requires a value"
+                branch_name="$2"
+                shift 2
+                ;;
+            --allow-dirty)
+                allow_dirty="1"
+                shift
+                ;;
+            --)
+                shift
+                codex_args=("$@")
+                break
+                ;;
+            *)
+                codex_args+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    if [[ "$allow_dirty" != "1" ]]; then
+        ensure_clean_checkout "$root"
+    fi
+
+    local codex_bin
+    codex_bin="$(resolve_codex_bin)"
+    export HOST_CODEX_BIN="$codex_bin"
+
+    local auth_mode
+    auth_mode="$(resolve_auth_mode)"
+
+    local run_id
+    run_id="$(date +%Y%m%d-%H%M%S)-$(random_suffix)"
+
+    local branch_prefix="${ALCATRAZ_BRANCH_PREFIX:-alcatraz}"
+    if [[ -z "$branch_name" ]]; then
+        branch_name="$branch_prefix/$run_id"
+    fi
+
+    git -C "$root" show-ref --verify --quiet "refs/heads/$branch_name" && die "branch already exists: $branch_name"
+
+    local worktree_path="$root/.alcatraz/worktrees/$run_id"
+    export ALCATRAZ_WORKSPACE="$worktree_path"
+
+    local compose_project
+    compose_project="$(printf '%s-%s' "${ALCATRAZ_COMPOSE_PREFIX:-alcatraz}" "$run_id" | tr '[:upper:]/_' '[:lower:]--')"
+    export COMPOSE_PROJECT_NAME="$compose_project"
+
+    log "creating worktree $worktree_path on branch $branch_name from $base_ref"
+    git -C "$root" worktree add -b "$branch_name" "$worktree_path" "$base_ref" >/dev/null
+
+    mkdir -p "$root/.alcatraz/state"
+    cat >"$root/.alcatraz/state/last-run.env" <<EOF
+ALCATRAZ_RUN_ID=$run_id
+ALCATRAZ_BRANCH_NAME=$branch_name
+ALCATRAZ_WORKTREE_PATH=$worktree_path
+ALCATRAZ_COMPOSE_PROJECT=$compose_project
+ALCATRAZ_AUTH_MODE=$auth_mode
+EOF
+
+    local cleanup_status=0
+    cleanup() {
+        local exit_code=$?
+        if [[ $cleanup_status -eq 0 ]]; then
+            cleanup_status=1
+            docker compose "${compose_args[@]}" down --remove-orphans >/dev/null 2>&1 || true
+        fi
+        return "$exit_code"
+    }
+    trap cleanup EXIT INT TERM
+
+    local compose_args=()
+    while IFS= read -r compose_file; do
+        compose_args+=(-f "$compose_file")
+    done < <(compose_files "$auth_mode")
+
+    log "starting isolated runtime for $branch_name"
+    docker compose "${compose_args[@]}" up -d egress-proxy >/dev/null
+
+    local codex_command=(
+        codex
+        --dangerously-bypass-approvals-and-sandbox
+        -C /workspace
+    )
+    if [[ ${#codex_args[@]} -gt 0 ]]; then
+        codex_command+=("${codex_args[@]}")
+    fi
+
+    docker compose "${compose_args[@]}" run --rm --no-deps agent "${codex_command[@]}"
+
+    trap - EXIT INT TERM
+    cleanup
+
+    log "branch ready on host: $branch_name"
+    log "worktree preserved at: $worktree_path"
+}
+
+main() {
+    local cmd="${1:-help}"
+    if [[ $# -gt 0 ]]; then
+        shift
+    fi
+
+    case "$cmd" in
+        init)
+            run_init "$@"
+            ;;
+        run)
+            run_agent "$@"
+            ;;
+        help|-h|--help)
+            usage
+            ;;
+        *)
+            usage >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
