@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
+	"text/tabwriter"
+
+	rtpkg "github.com/jamesdrando/alcatraz/internal/runtime"
+	"github.com/jamesdrando/alcatraz/internal/runs"
 )
 
 func handleList(args []string) error {
@@ -18,18 +20,15 @@ func handleList(args []string) error {
 		return err
 	}
 
-	runtime, err := newRuntime(*configPath)
+	runtime, err := rtpkg.Open(rtpkg.OpenOptions{ConfigPath: *configPath})
 	if err != nil {
 		return err
 	}
+	service := runs.New(runtime)
 
-	runs, err := runtime.loadRuns()
+	statuses, err := service.ListStatuses()
 	if err != nil {
 		return err
-	}
-	statuses := make([]RunStatus, 0, len(runs))
-	for _, run := range runs {
-		statuses = append(statuses, runtime.enrichStatus(run))
 	}
 	return printStatuses(statuses, *asJSON, os.Stdout)
 }
@@ -47,15 +46,17 @@ func handleStatus(args []string) error {
 		*runID = fs.Arg(0)
 	}
 
-	runtime, err := newRuntime(*configPath)
+	runtime, err := rtpkg.Open(rtpkg.OpenOptions{ConfigPath: *configPath})
 	if err != nil {
 		return err
 	}
-	run, err := runtime.loadRun(*runID)
+	service := runs.New(runtime)
+
+	status, err := service.GetStatus(*runID)
 	if err != nil {
 		return err
 	}
-	return printStatuses([]RunStatus{runtime.enrichStatus(run)}, *asJSON, os.Stdout)
+	return printStatuses([]runs.RunStatus{status}, *asJSON, os.Stdout)
 }
 
 func handleConfig(args []string) error {
@@ -66,12 +67,13 @@ func handleConfig(args []string) error {
 		return err
 	}
 
-	runtime, err := newRuntime(*configPath)
+	runtime, err := rtpkg.Open(rtpkg.OpenOptions{ConfigPath: *configPath})
 	if err != nil {
 		return err
 	}
+	service := runs.New(runtime)
 
-	data, err := json.MarshalIndent(runtime.Config, "", "  ")
+	data, err := json.MarshalIndent(service.EffectiveConfig(), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -94,58 +96,24 @@ func handleClean(args []string) error {
 		*runID = fs.Arg(0)
 	}
 
-	runtime, err := newRuntime(*configPath)
+	runtime, err := rtpkg.Open(rtpkg.OpenOptions{ConfigPath: *configPath})
+	if err != nil {
+		return err
+	}
+	service := runs.New(runtime)
+
+	var summary runs.CleanupSummary
+	if *all {
+		summary, err = service.CleanAll(*deleteBranch)
+	} else {
+		summary, err = service.CleanRun(*runID, *deleteBranch)
+	}
 	if err != nil {
 		return err
 	}
 
-	var runs []RunMetadata
-	if *all {
-		runs, err = runtime.loadRuns()
-		if err != nil {
-			return err
-		}
-	} else {
-		run, err := runtime.loadRun(*runID)
-		if err != nil {
-			return err
-		}
-		runs = []RunMetadata{run}
-	}
-
-	cleaned := make([]RunStatus, 0, len(runs))
-	for _, run := range runs {
-		status := runtime.enrichStatus(run)
-		if err := dockerComposeDown(runtime, run); err != nil {
-			return err
-		}
-
-		if status.WorktreeExists {
-			if _, err := execInDir(runtime.RepoRoot, "git", "worktree", "remove", "--force", run.WorktreePath); err != nil {
-				return err
-			}
-		}
-
-		if *deleteBranch && status.BranchExists {
-			if _, err := execInDir(runtime.RepoRoot, "git", "branch", "-D", run.BranchName); err != nil {
-				return err
-			}
-		}
-
-		if err := os.Remove(runtime.metadataPath(run.ID)); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-
-		status.Running = false
-		status.WorktreeExists = false
-		if *deleteBranch {
-			status.BranchExists = false
-		}
-		cleaned = append(cleaned, status)
-	}
-
 	if *asJSON {
-		data, err := json.MarshalIndent(cleaned, "", "  ")
+		data, err := json.MarshalIndent(summary, "", "  ")
 		if err != nil {
 			return err
 		}
@@ -153,34 +121,38 @@ func handleClean(args []string) error {
 		return nil
 	}
 
-	for _, run := range cleaned {
-		fmt.Printf("Removed worktree for %s\n", run.ID)
+	for _, item := range summary.Runs {
+		fmt.Printf("Removed worktree for %s\n", item.RunID)
 		if *deleteBranch {
-			fmt.Printf("Deleted branch %s\n", run.BranchName)
+			fmt.Printf("Deleted branch %s\n", item.BranchName)
 		}
 	}
 	return nil
 }
 
-func dockerComposeDown(runtime *Runtime, run RunMetadata) error {
-	env := runtime.commandEnv(map[string]string{
-		"COMPOSE_PROJECT_NAME": run.ComposeProject,
-	})
-	if path, err := runtime.resolveCodexBin(); err == nil {
-		env = append(env, "HOST_CODEX_BIN="+path)
+func printStatuses(statuses []runs.RunStatus, asJSON bool, out *os.File) error {
+	if asJSON {
+		data, err := json.MarshalIndent(statuses, "", "  ")
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(out, string(data))
+		return err
 	}
 
-	files := make([]string, 0, len(run.ComposeFiles)*2)
-	for _, file := range run.ComposeFiles {
-		files = append(files, "-f", filepath.Join(runtime.RepoRoot, file))
+	if len(statuses) == 0 {
+		_, err := fmt.Fprintln(out, "No runs found.")
+		return err
 	}
 
-	args := append([]string{"compose"}, files...)
-	args = append(args, "down", "--remove-orphans")
-	cmd := exec.Command("docker", args...)
-	cmd.Dir = runtime.RepoRoot
-	cmd.Env = env
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "RUN ID\tBRANCH\tSTATE\tDIRTY\tWORKTREE")
+	for _, status := range statuses {
+		dirty := "clean"
+		if status.Dirty {
+			dirty = "dirty"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", status.ID, status.BranchName, status.Status, dirty, status.WorktreePath)
+	}
+	return tw.Flush()
 }

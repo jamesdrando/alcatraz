@@ -25,6 +25,7 @@ For a real install:
 
 ```bash
 go install github.com/jamesdrando/alcatraz/cmd/alcatraz@latest
+go install github.com/jamesdrando/alcatraz/cmd/alcatraz-mcp@latest
 ```
 
 ## Commands
@@ -64,7 +65,7 @@ You can also pass one directly:
 alcatraz run --config path/to/config.json
 ```
 
-A sample config lives at [alcatraz.example.json](/home/drandall/alcatraz/alcatraz.example.json).
+A sample config lives at [alcatraz.example.json](/workspace/alcatraz.example.json).
 
 Config is intentionally non-secret. Keep secrets in a local `.env`, not in the config file.
 
@@ -93,6 +94,63 @@ Auth can come from either:
 
 - `OPENAI_API_KEY`
 - `HOST_CODEX_HOME` pointing to a local logged-in `.codex` directory
+
+## MCP Server
+
+`alcatraz-mcp` is a separate host-side binary. It uses the same internal runtime as the human CLI and does not shell out to `alcatraz`.
+
+Run it locally over stdio:
+
+```bash
+go run ./cmd/alcatraz-mcp
+```
+
+The MCP layer stays thin:
+
+- it discovers config the same way as the CLI
+- it keeps runtime state under `.git/alcatraz/`
+- it reuses `.env` and the same auth resolution rules
+- it does not require an existing Alcatraz container to already be running
+
+`alcatraz_run` creates the git worktree, branch, metadata, compose project, and detached container set for a run. It starts `egress-proxy` and `agent` on the host. If `extra_agent_args` are provided, it also executes the configured agent command inside the fresh `agent` container after startup.
+
+## MCP Tool Contract
+
+All tool responses return concise structured payloads plus a text JSON mirror for client compatibility.
+
+`alcatraz_run`
+
+- input: `config_path?`, `base_ref?`, `branch_name?`, `allow_dirty?`, `extra_agent_args?`
+- result: `run_id`, `branch_name`, `worktree_path`, `compose_project`, `auth_mode`
+
+`alcatraz_list_runs`
+
+- result: `{ "runs": [RunStatus...] }`
+
+`alcatraz_get_run`
+
+- input: `run_id`
+- result: `RunStatus`
+
+`alcatraz_clean_run`
+
+- input: `run_id`, `delete_branch`
+- result: `{ "runs": [CleanupResult] }`
+
+`alcatraz_clean_all`
+
+- input: `delete_branch`
+- result: `{ "runs": [CleanupResult...] }`
+
+`alcatraz_get_config`
+
+- input: `config_path?`
+- result: effective config JSON
+
+`RunStatus` includes:
+
+- `id`, `branch_name`, `base_ref`, `worktree_path`, `compose_project`, `auth_mode`
+- `status`, `running`, `worktree_exists`, `branch_exists`, `dirty`
 
 ## Security Model
 

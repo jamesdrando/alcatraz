@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -19,7 +19,7 @@ type Config struct {
 	AgentCommand         []string `json:"agent_command"`
 }
 
-func defaultConfig() Config {
+func Default() Config {
 	return Config{
 		BranchPrefix:         "alcatraz",
 		ComposeProjectPrefix: "alcatraz",
@@ -32,10 +32,10 @@ func defaultConfig() Config {
 	}
 }
 
-func loadConfig(repoRoot, explicitPath string) (Config, error) {
-	cfg := defaultConfig()
+func Load(repoRoot, explicitPath string) (Config, error) {
+	cfg := Default()
 
-	path, err := resolveConfigPath(repoRoot, explicitPath)
+	path, err := ResolvePath(repoRoot, explicitPath)
 	if err != nil {
 		return Config{}, err
 	}
@@ -47,38 +47,16 @@ func loadConfig(repoRoot, explicitPath string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
-
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
 
 	cfg.ConfigPath = path
-	if len(cfg.ComposeFiles) == 0 {
-		cfg.ComposeFiles = defaultConfig().ComposeFiles
-	}
-	if len(cfg.AgentCommand) == 0 {
-		cfg.AgentCommand = defaultConfig().AgentCommand
-	}
-	if cfg.BranchPrefix == "" {
-		cfg.BranchPrefix = defaultConfig().BranchPrefix
-	}
-	if cfg.ComposeProjectPrefix == "" {
-		cfg.ComposeProjectPrefix = defaultConfig().ComposeProjectPrefix
-	}
-	if cfg.DefaultBaseRef == "" {
-		cfg.DefaultBaseRef = defaultConfig().DefaultBaseRef
-	}
-	if cfg.EnvFile == "" {
-		cfg.EnvFile = defaultConfig().EnvFile
-	}
-	if cfg.ChatGPTComposeFile == "" {
-		cfg.ChatGPTComposeFile = defaultConfig().ChatGPTComposeFile
-	}
-
+	applyDefaults(&cfg)
 	return cfg, nil
 }
 
-func resolveConfigPath(repoRoot, explicitPath string) (string, error) {
+func ResolvePath(repoRoot, explicitPath string) (string, error) {
 	if explicitPath != "" {
 		if filepath.IsAbs(explicitPath) {
 			return explicitPath, nil
@@ -100,4 +78,29 @@ func resolveConfigPath(repoRoot, explicitPath string) (string, error) {
 	}
 
 	return "", nil
+}
+
+func applyDefaults(cfg *Config) {
+	defaults := Default()
+	if len(cfg.ComposeFiles) == 0 {
+		cfg.ComposeFiles = defaults.ComposeFiles
+	}
+	if len(cfg.AgentCommand) == 0 {
+		cfg.AgentCommand = defaults.AgentCommand
+	}
+	if cfg.BranchPrefix == "" {
+		cfg.BranchPrefix = defaults.BranchPrefix
+	}
+	if cfg.ComposeProjectPrefix == "" {
+		cfg.ComposeProjectPrefix = defaults.ComposeProjectPrefix
+	}
+	if cfg.DefaultBaseRef == "" {
+		cfg.DefaultBaseRef = defaults.DefaultBaseRef
+	}
+	if cfg.EnvFile == "" {
+		cfg.EnvFile = defaults.EnvFile
+	}
+	if cfg.ChatGPTComposeFile == "" {
+		cfg.ChatGPTComposeFile = defaults.ChatGPTComposeFile
+	}
 }
