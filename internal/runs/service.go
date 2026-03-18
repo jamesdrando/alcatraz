@@ -132,10 +132,18 @@ func (s *Service) EffectiveConfig() config.Config {
 }
 
 func (s *Service) Create(opts CreateOptions) (RunMetadata, error) {
+	if err := s.runtime.EnsureEnvFileIgnored(); err != nil {
+		return RunMetadata{}, err
+	}
+
 	if !opts.AllowDirty && !s.runtime.Config.AllowDirty {
 		if err := s.git.EnsureCleanCheckout(); err != nil {
 			return RunMetadata{}, err
 		}
+	}
+
+	if err := s.runtime.EnsureEnvFile(); err != nil {
+		return RunMetadata{}, err
 	}
 
 	authMode, err := s.runtime.ResolveAuthMode()

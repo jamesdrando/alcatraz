@@ -79,6 +79,8 @@ Config is intentionally non-secret. Keep secrets in a local `.env`, not in the c
 
 If you set `compose_files` or `chatgpt_compose_file`, those values now refer to bundled asset names such as `compose.yaml`, `compose.codex.yaml`, and `compose.chatgpt.yaml`, not arbitrary files in the target repo.
 
+On first `alcatraz run`, if the configured env file is missing, Alcatraz will create it for you with any local values it can already discover, such as `HOST_CODEX_BIN`, `HOST_CODEX_HOME`, and `OPENAI_API_KEY`. It writes the file with `0600` permissions and adds it to `.git/info/exclude` when the env file lives inside the repo, so existing repos stay local-first without needing a committed setup file.
+
 ## Runtime Layout
 
 To keep public repos clean while avoiding Git/tooling edge cases, Alcatraz splits runtime data in two places:

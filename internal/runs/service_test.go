@@ -149,6 +149,71 @@ func TestCreateRejectsDirtyCheckoutUnlessAllowed(t *testing.T) {
 	}
 }
 
+func TestCreateBootstrapsEnvFileWhenMissing(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	service := NewForTesting(runtime, gitops.New(repoRoot), &fakeDocker{runningProjects: map[string]bool{}})
+	service.newRunID = func() string { return "20260318-000001-feed" }
+
+	if _, err := service.Create(CreateOptions{}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	envPath := filepath.Join(repoRoot, ".env")
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read generated env file: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "OPENAI_API_KEY=test-key") {
+		t.Fatalf("generated env file missing OPENAI_API_KEY: %s", content)
+	}
+	if !strings.Contains(content, "HOST_CODEX_BIN=/bin/sh") {
+		t.Fatalf("generated env file missing HOST_CODEX_BIN: %s", content)
+	}
+
+	info, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatalf("stat generated env file: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("expected env file permissions 0600, got %o", info.Mode().Perm())
+	}
+
+	excludeData, err := os.ReadFile(filepath.Join(repoRoot, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatalf("read git exclude: %v", err)
+	}
+	if !strings.Contains(string(excludeData), "/.env") {
+		t.Fatalf("git exclude missing /.env entry: %s", string(excludeData))
+	}
+}
+
+func TestCreatePreservesExistingEnvFile(t *testing.T) {
+	repoRoot := initRepo(t)
+	envPath := filepath.Join(repoRoot, ".env")
+	original := "OPENAI_API_KEY=keep-me\n"
+	if err := os.WriteFile(envPath, []byte(original), 0o600); err != nil {
+		t.Fatalf("write existing env file: %v", err)
+	}
+
+	runtime := newTestRuntime(t, repoRoot)
+	service := NewForTesting(runtime, gitops.New(repoRoot), &fakeDocker{runningProjects: map[string]bool{}})
+	service.newRunID = func() string { return "20260318-000001-face" }
+
+	if _, err := service.Create(CreateOptions{}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read env file after create: %v", err)
+	}
+	if string(data) != original {
+		t.Fatalf("existing env file was overwritten: %s", string(data))
+	}
+}
+
 func TestFinishCommitsMergesAndCleans(t *testing.T) {
 	repoRoot := initRepo(t)
 	runtime := newTestRuntime(t, repoRoot)
