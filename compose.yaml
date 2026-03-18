@@ -43,6 +43,7 @@ services:
     build:
       context: .
       dockerfile: docker/egress-proxy/Dockerfile
+    user: "proxy:proxy"
     environment:
       SQUID_ALLOWED_DOMAINS: ${SQUID_ALLOWED_DOMAINS:-api.openai.com chatgpt.com auth.openai.com files.oaiusercontent.com deb.debian.org security.debian.org registry.npmjs.org pypi.org files.pythonhosted.org crates.io index.crates.io static.crates.io bun.com bun.sh}
     read_only: true
@@ -50,8 +51,6 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=64m
     cap_drop:
       - ALL
-    cap_add:
-      - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
     expose:
