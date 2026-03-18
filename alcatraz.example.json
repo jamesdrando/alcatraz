@@ -1,0 +1,18 @@
+{
+  "branch_prefix": "alcatraz",
+  "compose_project_prefix": "alcatraz",
+  "default_base_ref": "HEAD",
+  "allow_dirty": false,
+  "env_file": ".env",
+  "compose_files": [
+    "compose.yaml",
+    "compose.codex.yaml"
+  ],
+  "chatgpt_compose_file": "compose.chatgpt.yaml",
+  "agent_command": [
+    "codex",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C",
+    "/workspace"
+  ]
+}

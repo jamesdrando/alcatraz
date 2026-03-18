@@ -1,138 +1,117 @@
 # alcatraz
 
-Secure Docker baseline for running coding agents inside a container with:
+`alcatraz` is a Go CLI for running coding agents inside a hardened Docker boundary.
 
-- a hardened agent runtime
-- default-deny outbound networking
-- an explicit HTTPS allowlist for the domains the agent actually needs
-- support for either API-key auth or a seeded ChatGPT/Codex login
+It is intentionally scoped to the containerization layer:
 
-## Why this shape
+- secure-ish local agent runtime
+- git worktree and branch isolation
+- lifecycle commands with a machine-friendly contract
+- no secrets stored in committed config
 
-Raw Docker networking is good at isolating containers, but it is not a great domain allowlist mechanism by itself. Domains resolve to changing IPs, CDNs move traffic around, and simple IP rules get brittle fast.
+Orchestration is meant to sit on top of this later, not inside it.
 
-For a greenfield agent setup, the safest practical pattern is:
+## Install
 
-1. Put the agent on an `internal` Docker network so it has no direct internet route.
-2. Give it a single egress path through a dedicated proxy container.
-3. Make that proxy allow only a short list of domains such as `api.openai.com`.
-
-That gives us a useful security property: even if the agent tries to reach arbitrary hosts, it only has one network path available, and that path enforces the allowlist.
-
-## Files
-
-- `alcatraz`: repo-local launcher for `init` and `run`
-- `compose.yaml`: main runtime definition
-- `compose.codex.yaml`: mounts the local Codex CLI into the agent container
-- `docker/agent/Dockerfile`: minimal non-root agent image
-- `docker/egress-proxy/Dockerfile`: tiny Squid-based allowlist proxy
-- `docker/egress-proxy/docker-entrypoint.sh`: builds the runtime allowlist file
-- `docker/egress-proxy/squid.conf`: locked-down proxy config
-- `.env.example`: required environment variables
-
-## Quick start
-
-1. Copy `.env.example` to `.env`.
-2. Choose one auth mode:
+For repo-local development:
 
 ```bash
-# Option A: API key
-OPENAI_API_KEY=...
-
-# Option B: reuse an existing Codex/ChatGPT login
-HOST_CODEX_HOME=/absolute/path/to/your/.codex
+./alcatraz help
 ```
 
-3. Adjust `SQUID_ALLOWED_DOMAINS` only if the agent truly needs more outbound access.
-4. Start the stack:
+That wrapper simply runs the Go CLI from source.
 
-API key mode:
+For a real install:
 
 ```bash
-docker compose up --build -d
+go install github.com/jamesdrando/alcatraz/cmd/alcatraz@latest
 ```
 
-ChatGPT login reuse mode:
+## Commands
 
 ```bash
-docker compose -f compose.yaml -f compose.chatgpt.yaml up --build -d
+alcatraz run
+alcatraz list
+alcatraz status
+alcatraz clean
+alcatraz config
 ```
 
-5. Open a shell inside the agent container:
+Useful examples:
 
 ```bash
-docker compose exec agent bash
+alcatraz run
+alcatraz run --base-ref main -- --no-alt-screen
+alcatraz run --branch feature/sandbox-hardening
+alcatraz list --json
+alcatraz status --json
+alcatraz clean --all --delete-branch
 ```
 
-The repository is mounted at `/workspace`, and the agent home directory lives in a Docker volume.
+## Config
 
-## Alcatraz workflow
+`alcatraz run` works without a config file and uses built-in defaults.
 
-For day-to-day use, the intended entrypoint is the repo-local launcher:
+If a repo wants explicit config, the CLI looks for these files in order:
+
+1. `.alcatraz.json`
+2. `.alcatraz/config.json`
+3. `alcatraz.json`
+
+You can also pass one directly:
 
 ```bash
-./alcatraz init
-./alcatraz run
+alcatraz run --config path/to/config.json
 ```
 
-`./alcatraz init` creates:
+A sample config lives at [alcatraz.example.json](/home/drandall/alcatraz/alcatraz.example.json).
 
-- `.alcatraz/config.env`
-- `.alcatraz/worktrees/`
-- `.alcatraz/logs/`
-- `.alcatraz/state/`
-- `.env` from `.env.example` if you do not already have one
+Config is intentionally non-secret. Keep secrets in a local `.env`, not in the config file.
 
-`./alcatraz run` then:
+## Runtime Layout
 
-1. checks that your current checkout is clean by default
-2. creates a fresh git worktree under `.alcatraz/worktrees/<run-id>`
-3. creates a branch like `alcatraz/20260318-123456-abcd`
-4. starts Docker with that worktree mounted as `/workspace`
-5. mounts your local static `codex` binary into the container
-6. launches Codex inside the container with the container as the trust boundary
+To keep public repos clean, runtime state is stored under `.git/alcatraz/`, not in the working tree:
 
-Because the worktree is a real git checkout, branch and file changes are immediately visible on the host. There is no separate copy-back step.
+- `.git/alcatraz/worktrees/`
+- `.git/alcatraz/runs/`
 
-Examples:
+That means:
 
-```bash
-./alcatraz run
-./alcatraz run -- "Fix the failing tests"
-./alcatraz run --base-ref main -- --no-alt-screen
-```
+- worktrees do not clutter the repo root
+- run metadata stays local
+- nothing under that runtime path is at risk of being committed accidentally
 
-The generated worktree and branch are preserved after the session so you can inspect, diff, or merge them locally.
+## Secrets
 
-## Auth modes
+This repo keeps secrets out of git by design:
 
-You can run this setup in either of these modes:
+- `.env.example` is safe to commit
+- `.env` is gitignored
+- config files should not contain credentials
 
-- `OPENAI_API_KEY`: good for API-first automation and service-style usage
-- `HOST_CODEX_HOME`: good when your local Codex setup is already logged in with ChatGPT
+Auth can come from either:
 
-When you start with `compose.chatgpt.yaml`, the container mounts `HOST_CODEX_HOME` read-only at startup and copies `auth.json` and `config.toml` into the container's own `CODEX_HOME` volume if they are not already present. After that, the container keeps its own auth state under `/home/agent/.codex`.
+- `OPENAI_API_KEY`
+- `HOST_CODEX_HOME` pointing to a local logged-in `.codex` directory
 
-That gives us a safer default than mounting your whole live `~/.codex` directory read-write into the container.
+## Security Model
 
-## Security model
+The container runtime keeps the important restrictions:
 
-The `agent` service is intentionally constrained:
-
-- non-root user
+- non-root `agent` user
+- read-only root filesystem
 - `cap_drop: [ALL]`
 - `no-new-privileges`
-- read-only root filesystem
-- writable paths only through explicit mounts and `tmpfs`
-- no direct connection to the public internet
+- explicit writable mounts and `tmpfs`
+- default-deny outbound model via the egress proxy
 
-Inside the container, `alcatraz run` starts Codex with internal sandbox bypass enabled on purpose. The container is the outer sandbox, so this avoids stacking a second restrictive sandbox inside the first one.
+The `egress-proxy` is the only container with outbound access, and it only permits domains from `SQUID_ALLOWED_DOMAINS`.
 
-The `egress-proxy` service is the only container with outbound access. It accepts requests only from the private Docker network and only forwards requests to domains on the allowlist.
+Inside the container, the agent itself is launched with internal sandbox bypass enabled on purpose. The Docker boundary is the sandbox.
 
-## Default allowlist
+## Default Allowlist
 
-The starter allowlist is intentionally small:
+The default allowlist includes:
 
 - `api.openai.com`
 - `chatgpt.com`
@@ -149,33 +128,11 @@ The starter allowlist is intentionally small:
 - `bun.com`
 - `bun.sh`
 
-This is now a practical starter set for ChatGPT-authenticated Codex/OpenAI access plus common package installation flows in Debian, npm, pip, Cargo, and Bun.
+That covers ChatGPT-authenticated Codex/OpenAI traffic plus common package installation flows for Debian, npm, pip, Cargo, and Bun.
 
-Notes:
+## Notes
 
-- `chatgpt.com` is needed for ChatGPT-authenticated Codex traffic. If you log in with ChatGPT rather than an API key, this host is part of the normal control path.
-- `auth.openai.com` is included for token/auth flows associated with ChatGPT-style login.
-- `bun install` uses `registry.npmjs.org` by default, so Bun package installs are already covered by the npm registry entry.
-- `bun.com` and `bun.sh` are included for installing the Bun runtime itself.
-- `crates.io`, `index.crates.io`, and `static.crates.io` cover the common Cargo crates.io flow. `static.crates.io` is included defensively because crate downloads may be served from that host.
-
-If you later need git dependencies, private registries, or language-specific mirrors, do not open the internet broadly. Add only the exact domains you need and document why each one exists.
-
-## Important caveats
-
-- This design assumes the agent runtime honors `HTTP_PROXY` / `HTTPS_PROXY`.
-- ChatGPT login reuse is practical for Codex-style tooling, but ordinary OpenAI API client libraries still expect API credentials rather than a ChatGPT web login.
-- A ChatGPT-authenticated Codex session still cannot inspect arbitrary external websites unless those sites are also on the allowlist or you adopt a broader browsing policy.
-- `./alcatraz run` refuses to start from a dirty checkout unless you pass `--allow-dirty`, because worktrees are created from committed git state.
-- If you want package installation, prefer internal mirrors for npm, PyPI, crates, apt, and git hosting rather than opening general outbound access.
-- Do not mount the host Docker socket into the agent container.
-- Do not run the container as `privileged`.
-- For stronger isolation on Linux hosts, combine this with rootless Docker or Podman and user namespaces.
-
-## Next tightening steps
-
-If you want to push this further later, the next upgrades I would make are:
-
-1. Add a custom seccomp profile after observing the syscall set your workflow actually needs.
-2. Move package retrieval behind internal mirrors and add only those mirror domains to the allowlist.
-3. Add CI checks that fail if the Compose config regresses on `cap_drop`, `read_only`, or network layout.
+- The CLI mounts a fresh git worktree into `/workspace` and creates a new branch automatically unless you provide one.
+- `alcatraz list` and `alcatraz status` are intended to be easy for humans and orchestration layers to consume.
+- `alcatraz clean` removes worktrees and can optionally delete the run branches too.
+- If you need to inspect arbitrary external websites from inside the container, those domains must still be allowed explicitly.
