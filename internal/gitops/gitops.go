@@ -1,0 +1,142 @@
+package gitops
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+type Client struct {
+	RepoRoot string
+}
+
+func New(repoRoot string) *Client {
+	return &Client{RepoRoot: repoRoot}
+}
+
+func DiscoverRepoRoot(startDir string) (string, error) {
+	out, err := execInDir(startDir, "git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", errors.New("must be run inside a git repository")
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func DiscoverGitDir(repoRoot string) (string, error) {
+	out, err := execInDir(repoRoot, "git", "rev-parse", "--git-dir")
+	if err != nil {
+		return "", fmt.Errorf("resolve git dir: %w", err)
+	}
+	gitDir := strings.TrimSpace(out)
+	if filepath.IsAbs(gitDir) {
+		return gitDir, nil
+	}
+	return filepath.Join(repoRoot, gitDir), nil
+}
+
+func (c *Client) EnsureCleanCheckout() error {
+	out, err := execInDir(c.RepoRoot, "git", "status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("git status: %w", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		return errors.New("working tree is not clean; commit or stash changes first, or rerun with --allow-dirty")
+	}
+	return nil
+}
+
+func (c *Client) BranchExists(branchName string) (bool, error) {
+	return commandSucceededInDir(c.RepoRoot, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
+}
+
+func (c *Client) CreateWorktree(worktreePath, branchName, baseRef string) error {
+	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Stat(worktreePath); err == nil {
+		return fmt.Errorf("worktree path already exists: %s", worktreePath)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	branchExists, err := c.BranchExists(branchName)
+	if err != nil {
+		return err
+	}
+	if branchExists {
+		return fmt.Errorf("branch already exists: %s", branchName)
+	}
+
+	if _, err := execInDir(c.RepoRoot, "git", "worktree", "add", "-b", branchName, worktreePath, baseRef); err != nil {
+		return fmt.Errorf("create worktree: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) RemoveWorktree(worktreePath string) error {
+	if _, err := execInDir(c.RepoRoot, "git", "worktree", "remove", "--force", worktreePath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) DeleteBranch(branchName string) error {
+	if _, err := execInDir(c.RepoRoot, "git", "branch", "-D", branchName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) WorktreeDirty(worktreePath string) (bool, error) {
+	out, err := execInDir(worktreePath, "git", "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+func commandSucceededInDir(dir, name string, args ...string) (bool, error) {
+	cmd := exec.Command(name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	if stderr.Len() > 0 {
+		return false, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return false, err
+}
+
+func execInDir(dir string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+		return "", err
+	}
+	return stdout.String(), nil
+}
