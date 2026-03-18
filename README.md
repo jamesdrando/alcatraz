@@ -209,5 +209,6 @@ That covers ChatGPT-authenticated Codex/OpenAI traffic plus common package insta
 - `alcatraz list` and `alcatraz status` are intended to be easy for humans and orchestration layers to consume.
 - `alcatraz diff <run-id>` lets you inspect a run without navigating into the worktree yourself.
 - `alcatraz finish <run-id>` stages and commits run changes for you, and can also merge into your current branch and clean up the run.
+- If `finish` reports `No new worktree changes to commit`, that only means it did not create an extra commit from the worktree. With `--merge`, `--clean`, or `--delete-branch`, it still continues with those requested actions.
 - `alcatraz clean` removes worktrees and can optionally delete the run branches too.
 - If you need to inspect arbitrary external websites from inside the container, those domains must still be allowed explicitly.

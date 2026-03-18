@@ -260,6 +260,58 @@ func TestFinishCommitsMergesAndCleans(t *testing.T) {
 	}
 }
 
+func TestFinishMergesAndCleansWhenRunWorktreeIsAlreadyCommitted(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+	service.newRunID = func() string { return "20260318-000003-babe" }
+
+	meta, err := service.Create(CreateOptions{})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	filePath := filepath.Join(meta.WorktreePath, "clean.txt")
+	if err := os.WriteFile(filePath, []byte("already committed\n"), 0o644); err != nil {
+		t.Fatalf("write worktree file: %v", err)
+	}
+	runCmd(t, meta.WorktreePath, "git", "add", "clean.txt")
+	runCmd(t, meta.WorktreePath, "git", "commit", "-m", "commit before finish")
+
+	result, err := service.Finish(FinishOptions{
+		RunID:        meta.ID,
+		Merge:        true,
+		Clean:        true,
+		DeleteBranch: true,
+	})
+	if err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+
+	if result.CommitCreated {
+		t.Fatal("expected no new commit to be created by finish")
+	}
+	if !result.Merged {
+		t.Fatal("expected branch to be merged")
+	}
+	if !result.WorktreeRemoved || !result.BranchDeleted || !result.MetadataRemoved {
+		t.Fatalf("unexpected finish result: %+v", result)
+	}
+	if docker.downCalls != 1 {
+		t.Fatalf("expected one down call, got %d", docker.downCalls)
+	}
+
+	mergedFile := filepath.Join(repoRoot, "clean.txt")
+	data, err := os.ReadFile(mergedFile)
+	if err != nil {
+		t.Fatalf("merged file missing from repo root: %v", err)
+	}
+	if string(data) != "already committed\n" {
+		t.Fatalf("unexpected merged file content: %q", string(data))
+	}
+}
+
 func TestCreateRejectsUnknownBundledComposeAsset(t *testing.T) {
 	repoRoot := initRepo(t)
 	configPath := filepath.Join(repoRoot, ".alcatraz.json")

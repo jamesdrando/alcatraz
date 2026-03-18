@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"text/tabwriter"
 
@@ -203,21 +204,7 @@ func handleFinish(args []string) error {
 		return nil
 	}
 
-	if result.CommitCreated {
-		fmt.Printf("Committed changes on %s\n", result.BranchName)
-	} else {
-		fmt.Printf("No new worktree changes to commit on %s\n", result.BranchName)
-	}
-	if result.Merged {
-		fmt.Printf("Merged %s into %s\n", result.BranchName, result.MergeTarget)
-	}
-	if result.WorktreeRemoved {
-		fmt.Printf("Removed worktree for %s\n", result.RunID)
-	}
-	if result.BranchDeleted {
-		fmt.Printf("Deleted branch %s\n", result.BranchName)
-	}
-	return nil
+	return printFinishResult(result, os.Stdout)
 }
 
 func printStatuses(statuses []runs.RunStatus, asJSON bool, out *os.File) error {
@@ -245,4 +232,32 @@ func printStatuses(statuses []runs.RunStatus, asJSON bool, out *os.File) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", status.ID, status.BranchName, status.Status, dirty, status.WorktreePath)
 	}
 	return tw.Flush()
+}
+
+func printFinishResult(result runs.FinishResult, out io.Writer) error {
+	if result.CommitCreated {
+		if _, err := fmt.Fprintf(out, "Committed changes on %s\n", result.BranchName); err != nil {
+			return err
+		}
+	} else {
+		if _, err := fmt.Fprintf(out, "No new worktree changes to commit on %s\n", result.BranchName); err != nil {
+			return err
+		}
+	}
+	if result.Merged {
+		if _, err := fmt.Fprintf(out, "Merged %s into %s\n", result.BranchName, result.MergeTarget); err != nil {
+			return err
+		}
+	}
+	if result.WorktreeRemoved {
+		if _, err := fmt.Fprintf(out, "Removed worktree for %s\n", result.RunID); err != nil {
+			return err
+		}
+	}
+	if result.BranchDeleted {
+		if _, err := fmt.Fprintf(out, "Deleted branch %s\n", result.BranchName); err != nil {
+			return err
+		}
+	}
+	return nil
 }
