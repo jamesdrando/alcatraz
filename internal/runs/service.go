@@ -13,6 +13,7 @@ import (
 
 	"github.com/jamesdrando/alcatraz/internal/config"
 	"github.com/jamesdrando/alcatraz/internal/dockerops"
+	"github.com/jamesdrando/alcatraz/internal/gitops"
 	rtpkg "github.com/jamesdrando/alcatraz/internal/runtime"
 )
 
@@ -90,6 +91,7 @@ type gitClient interface {
 	Commit(dir, message string) (bool, error)
 	MergeIntoCurrent(dir, branchName string) error
 	Diff(worktreePath, baseRef, branchName string, stat bool) (string, error)
+	ListWorktrees() ([]gitops.WorktreeEntry, error)
 }
 
 type dockerClient interface {
@@ -248,7 +250,17 @@ func (s *Service) CleanAll(deleteBranch bool) (CleanupSummary, error) {
 	if err != nil {
 		return CleanupSummary{}, err
 	}
-	return s.cleanRuns(items, deleteBranch, false)
+	summary, err := s.cleanRuns(items, deleteBranch, false)
+	if err != nil {
+		return CleanupSummary{}, err
+	}
+
+	legacy, err := s.cleanLegacyWorktrees(deleteBranch)
+	if err != nil {
+		return CleanupSummary{}, err
+	}
+	summary.Runs = append(summary.Runs, legacy.Runs...)
+	return summary, nil
 }
 
 func (s *Service) Finish(opts FinishOptions) (FinishResult, error) {
@@ -468,6 +480,64 @@ func (s *Service) cleanRuns(items []RunMetadata, deleteBranch bool, skipDown boo
 			return CleanupSummary{}, err
 		} else if err == nil {
 			result.MetadataRemoved = true
+		}
+
+		results = append(results, result)
+	}
+
+	return CleanupSummary{Runs: results}, nil
+}
+
+func (s *Service) cleanLegacyWorktrees(deleteBranch bool) (CleanupSummary, error) {
+	entries, err := s.git.ListWorktrees()
+	if err != nil {
+		return CleanupSummary{}, err
+	}
+
+	managedPrefix := filepath.Clean(s.runtime.WorktreeDir()) + string(os.PathSeparator)
+	results := make([]CleanupResult, 0)
+	for _, entry := range entries {
+		path := filepath.Clean(entry.Path)
+		if path == filepath.Clean(s.runtime.RepoRoot) {
+			continue
+		}
+		if !strings.HasPrefix(path, managedPrefix) {
+			continue
+		}
+
+		runID := filepath.Base(path)
+		if _, err := os.Stat(s.runtime.MetadataPath(runID)); err == nil {
+			continue
+		} else if err != nil && !os.IsNotExist(err) {
+			return CleanupSummary{}, err
+		}
+
+		result := CleanupResult{
+			RunID:        runID,
+			BranchName:   entry.Branch,
+			WorktreePath: path,
+		}
+
+		if _, err := os.Stat(path); err == nil {
+			if err := s.git.RemoveWorktree(path); err != nil {
+				return CleanupSummary{}, err
+			}
+			result.WorktreeRemoved = true
+		} else if err != nil && !os.IsNotExist(err) {
+			return CleanupSummary{}, err
+		}
+
+		if deleteBranch && strings.TrimSpace(entry.Branch) != "" {
+			branchExists, err := s.git.BranchExists(entry.Branch)
+			if err != nil {
+				return CleanupSummary{}, err
+			}
+			if branchExists {
+				if err := s.git.DeleteBranch(entry.Branch); err != nil {
+					return CleanupSummary{}, err
+				}
+				result.BranchDeleted = true
+			}
 		}
 
 		results = append(results, result)

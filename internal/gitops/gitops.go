@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -12,6 +13,11 @@ import (
 
 type Client struct {
 	RepoRoot string
+}
+
+type WorktreeEntry struct {
+	Path   string
+	Branch string
 }
 
 func New(repoRoot string) *Client {
@@ -164,6 +170,39 @@ func (c *Client) Diff(worktreePath, baseRef, branchName string, stat bool) (stri
 	}
 	args = append(args, baseRef+"..."+branchName)
 	return execInDir(c.RepoRoot, args[0], args[1:]...)
+}
+
+func (c *Client) ListWorktrees() ([]WorktreeEntry, error) {
+	out, err := execInDir(c.RepoRoot, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []WorktreeEntry
+	var current *WorktreeEntry
+	scanner := bufio.NewScanner(strings.NewReader(out))
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			if current != nil {
+				entries = append(entries, *current)
+			}
+			current = &WorktreeEntry{Path: strings.TrimPrefix(line, "worktree ")}
+		case strings.HasPrefix(line, "branch ") && current != nil:
+			current.Branch = strings.TrimPrefix(line, "branch refs/heads/")
+		case line == "" && current != nil:
+			entries = append(entries, *current)
+			current = nil
+		}
+	}
+	if current != nil {
+		entries = append(entries, *current)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 func commandSucceededInDir(dir, name string, args ...string) (bool, error) {
