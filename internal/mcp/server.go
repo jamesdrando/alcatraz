@@ -7,8 +7,8 @@ import (
 	"io"
 	"strings"
 
-	rtpkg "github.com/jamesdrando/alcatraz/internal/runtime"
 	"github.com/jamesdrando/alcatraz/internal/runs"
+	rtpkg "github.com/jamesdrando/alcatraz/internal/runtime"
 )
 
 const protocolVersion = "2025-06-18"
@@ -26,10 +26,10 @@ type rpcRequest struct {
 }
 
 type rpcResponse struct {
-	JSONRPC string     `json:"jsonrpc"`
-	ID      any        `json:"id,omitempty"`
-	Result  any        `json:"result,omitempty"`
-	Error   *rpcError  `json:"error,omitempty"`
+	JSONRPC string    `json:"jsonrpc"`
+	ID      any       `json:"id,omitempty"`
+	Result  any       `json:"result,omitempty"`
+	Error   *rpcError `json:"error,omitempty"`
 }
 
 type rpcError struct {
@@ -79,11 +79,11 @@ type cleanAllInput struct {
 }
 
 type runToolResult struct {
-	RunID          string            `json:"run_id"`
-	BranchName     string            `json:"branch_name"`
-	WorktreePath   string            `json:"worktree_path"`
-	ComposeProject string            `json:"compose_project"`
-	AuthMode       rtpkg.AuthMode    `json:"auth_mode"`
+	RunID          string         `json:"run_id"`
+	BranchName     string         `json:"branch_name"`
+	WorktreePath   string         `json:"worktree_path"`
+	ComposeProject string         `json:"compose_project"`
+	AuthMode       rtpkg.AuthMode `json:"auth_mode"`
 }
 
 func New(name, version string) *Server {
@@ -290,7 +290,7 @@ func (s *Server) tools() []toolDefinition {
 				"type": "object",
 				"properties": map[string]any{
 					"config_path": map[string]any{"type": "string"},
-					"base_ref": map[string]any{"type": "string"},
+					"base_ref":    map[string]any{"type": "string"},
 					"branch_name": map[string]any{"type": "string"},
 					"allow_dirty": map[string]any{"type": "boolean"},
 					"extra_agent_args": map[string]any{

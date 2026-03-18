@@ -30,6 +30,10 @@ func runCLI(args []string) error {
 		return handleList(args[1:])
 	case "status":
 		return handleStatus(args[1:])
+	case "diff":
+		return handleDiff(args[1:])
+	case "finish":
+		return handleFinish(args[1:])
 	case "clean":
 		return handleClean(args[1:])
 	case "config":
@@ -48,6 +52,8 @@ func printUsage() {
   alcatraz run [flags] [-- codex-args...]
   alcatraz list [--json]
   alcatraz status [run-id] [--json]
+  alcatraz diff [run-id] [--stat]
+  alcatraz finish [run-id] [flags]
   alcatraz clean [run-id|--all] [--delete-branch]
   alcatraz config
 
@@ -55,6 +61,8 @@ Commands:
   run     Create a git worktree, start the isolated container, and launch the agent
   list    List known runs and their worktrees
   status  Show details for one run, or the most recent run by default
+  diff    Show the diff for one run
+  finish  Commit a run, optionally merge it, and optionally clean it up
   clean   Remove one run or all runs; optionally delete branches too
   config  Print the effective config
 

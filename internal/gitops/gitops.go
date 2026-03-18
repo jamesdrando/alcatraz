@@ -99,6 +99,73 @@ func (c *Client) WorktreeDirty(worktreePath string) (bool, error) {
 	return strings.TrimSpace(out) != "", nil
 }
 
+func (c *Client) CurrentBranch(dir string) (string, error) {
+	out, err := execInDir(dir, "git", "branch", "--show-current")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (c *Client) SwitchBranch(dir, branchName string) error {
+	if _, err := execInDir(dir, "git", "switch", branchName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) StageAll(dir string) error {
+	if _, err := execInDir(dir, "git", "add", "-A"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) Commit(dir, message string) (bool, error) {
+	dirty, err := c.WorktreeDirty(dir)
+	if err != nil {
+		return false, err
+	}
+	if !dirty {
+		return false, nil
+	}
+	if err := c.StageAll(dir); err != nil {
+		return false, err
+	}
+	if _, err := execInDir(dir, "git", "commit", "-m", message); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (c *Client) MergeIntoCurrent(dir, branchName string) error {
+	if _, err := execInDir(dir, "git", "merge", "--no-ff", "--no-edit", branchName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) Diff(worktreePath, baseRef, branchName string, stat bool) (string, error) {
+	dirty, err := c.WorktreeDirty(worktreePath)
+	if err != nil {
+		return "", err
+	}
+	if dirty {
+		args := []string{"git", "diff"}
+		if stat {
+			args = append(args, "--stat")
+		}
+		return execInDir(worktreePath, args[0], args[1:]...)
+	}
+
+	args := []string{"git", "diff"}
+	if stat {
+		args = append(args, "--stat")
+	}
+	args = append(args, baseRef+"..."+branchName)
+	return execInDir(c.RepoRoot, args[0], args[1:]...)
+}
+
 func commandSucceededInDir(dir, name string, args ...string) (bool, error) {
 	cmd := exec.Command(name, args...)
 	if dir != "" {

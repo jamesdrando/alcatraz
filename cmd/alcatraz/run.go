@@ -9,8 +9,8 @@ import (
 	"os/exec"
 
 	"github.com/jamesdrando/alcatraz/internal/dockerops"
-	rtpkg "github.com/jamesdrando/alcatraz/internal/runtime"
 	"github.com/jamesdrando/alcatraz/internal/runs"
+	rtpkg "github.com/jamesdrando/alcatraz/internal/runtime"
 )
 
 type runOptions struct {

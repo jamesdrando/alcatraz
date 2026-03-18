@@ -131,6 +131,52 @@ func TestCreateRejectsDirtyCheckoutUnlessAllowed(t *testing.T) {
 	}
 }
 
+func TestFinishCommitsMergesAndCleans(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+	service.newRunID = func() string { return "20260318-000002-cafe" }
+
+	meta, err := service.Create(CreateOptions{})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	filePath := filepath.Join(meta.WorktreePath, "mcp.txt")
+	if err := os.WriteFile(filePath, []byte("mcp\n"), 0o644); err != nil {
+		t.Fatalf("write worktree file: %v", err)
+	}
+
+	result, err := service.Finish(FinishOptions{
+		RunID:        meta.ID,
+		Merge:        true,
+		Clean:        true,
+		DeleteBranch: true,
+	})
+	if err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+
+	if !result.CommitCreated {
+		t.Fatal("expected a commit to be created")
+	}
+	if !result.Merged {
+		t.Fatal("expected branch to be merged")
+	}
+	if !result.WorktreeRemoved || !result.BranchDeleted || !result.MetadataRemoved {
+		t.Fatalf("unexpected finish result: %+v", result)
+	}
+	if docker.downCalls != 1 {
+		t.Fatalf("expected one down call, got %d", docker.downCalls)
+	}
+
+	mergedFile := filepath.Join(repoRoot, "mcp.txt")
+	if _, err := os.Stat(mergedFile); err != nil {
+		t.Fatalf("merged file missing from repo root: %v", err)
+	}
+}
+
 func newTestRuntime(t *testing.T, repoRoot string) *rtpkg.Runtime {
 	t.Helper()
 

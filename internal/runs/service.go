@@ -17,15 +17,15 @@ import (
 )
 
 type RunMetadata struct {
-	ID             string           `json:"id"`
-	BranchName     string           `json:"branch_name"`
-	BaseRef        string           `json:"base_ref"`
-	WorktreePath   string           `json:"worktree_path"`
-	ComposeProject string           `json:"compose_project"`
-	AuthMode       rtpkg.AuthMode   `json:"auth_mode"`
-	ComposeFiles   []string         `json:"compose_files"`
-	ConfigPath     string           `json:"config_path,omitempty"`
-	CreatedAt      time.Time        `json:"created_at"`
+	ID             string         `json:"id"`
+	BranchName     string         `json:"branch_name"`
+	BaseRef        string         `json:"base_ref"`
+	WorktreePath   string         `json:"worktree_path"`
+	ComposeProject string         `json:"compose_project"`
+	AuthMode       rtpkg.AuthMode `json:"auth_mode"`
+	ComposeFiles   []string       `json:"compose_files"`
+	ConfigPath     string         `json:"config_path,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
 }
 
 type RunStatus struct {
@@ -57,6 +57,26 @@ type CleanupSummary struct {
 	Runs []CleanupResult `json:"runs"`
 }
 
+type FinishOptions struct {
+	RunID         string
+	CommitMessage string
+	Merge         bool
+	MergeInto     string
+	Clean         bool
+	DeleteBranch  bool
+}
+
+type FinishResult struct {
+	RunID           string `json:"run_id"`
+	BranchName      string `json:"branch_name"`
+	CommitCreated   bool   `json:"commit_created"`
+	Merged          bool   `json:"merged"`
+	MergeTarget     string `json:"merge_target,omitempty"`
+	WorktreeRemoved bool   `json:"worktree_removed"`
+	BranchDeleted   bool   `json:"branch_deleted"`
+	MetadataRemoved bool   `json:"metadata_removed"`
+}
+
 type gitClient interface {
 	EnsureCleanCheckout() error
 	BranchExists(branchName string) (bool, error)
@@ -64,6 +84,12 @@ type gitClient interface {
 	RemoveWorktree(worktreePath string) error
 	DeleteBranch(branchName string) error
 	WorktreeDirty(worktreePath string) (bool, error)
+	CurrentBranch(dir string) (string, error)
+	SwitchBranch(dir, branchName string) error
+	StageAll(dir string) error
+	Commit(dir, message string) (bool, error)
+	MergeIntoCurrent(dir, branchName string) error
+	Diff(worktreePath, baseRef, branchName string, stat bool) (string, error)
 }
 
 type dockerClient interface {
@@ -214,7 +240,7 @@ func (s *Service) CleanRun(runID string, deleteBranch bool) (CleanupSummary, err
 	if err != nil {
 		return CleanupSummary{}, err
 	}
-	return s.cleanRuns([]RunMetadata{meta}, deleteBranch)
+	return s.cleanRuns([]RunMetadata{meta}, deleteBranch, false)
 }
 
 func (s *Service) CleanAll(deleteBranch bool) (CleanupSummary, error) {
@@ -222,7 +248,100 @@ func (s *Service) CleanAll(deleteBranch bool) (CleanupSummary, error) {
 	if err != nil {
 		return CleanupSummary{}, err
 	}
-	return s.cleanRuns(items, deleteBranch)
+	return s.cleanRuns(items, deleteBranch, false)
+}
+
+func (s *Service) Finish(opts FinishOptions) (FinishResult, error) {
+	meta, err := s.loadRun(opts.RunID)
+	if err != nil {
+		return FinishResult{}, err
+	}
+
+	status, err := s.EnrichStatus(meta)
+	if err != nil {
+		return FinishResult{}, err
+	}
+
+	env, err := s.cleanupEnv(meta)
+	if err != nil {
+		return FinishResult{}, err
+	}
+	if err := s.docker.Down(meta.ComposeFiles, env, dockerops.Streams{}); err != nil {
+		return FinishResult{}, err
+	}
+
+	result := FinishResult{
+		RunID:      meta.ID,
+		BranchName: meta.BranchName,
+	}
+
+	message := strings.TrimSpace(opts.CommitMessage)
+	if message == "" {
+		message = fmt.Sprintf("alcatraz: finish %s", meta.ID)
+	}
+
+	if status.WorktreeExists {
+		committed, err := s.git.Commit(meta.WorktreePath, message)
+		if err != nil {
+			return FinishResult{}, err
+		}
+		result.CommitCreated = committed
+	}
+
+	if opts.Merge {
+		if err := s.git.EnsureCleanCheckout(); err != nil {
+			return FinishResult{}, err
+		}
+
+		targetBranch := strings.TrimSpace(opts.MergeInto)
+		if targetBranch == "" {
+			targetBranch, err = s.git.CurrentBranch(s.runtime.RepoRoot)
+			if err != nil {
+				return FinishResult{}, err
+			}
+		} else {
+			currentBranch, err := s.git.CurrentBranch(s.runtime.RepoRoot)
+			if err != nil {
+				return FinishResult{}, err
+			}
+			if currentBranch != targetBranch {
+				if err := s.git.SwitchBranch(s.runtime.RepoRoot, targetBranch); err != nil {
+					return FinishResult{}, err
+				}
+			}
+		}
+
+		if targetBranch == meta.BranchName {
+			return FinishResult{}, fmt.Errorf("merge target matches run branch: %s", targetBranch)
+		}
+		if err := s.git.MergeIntoCurrent(s.runtime.RepoRoot, meta.BranchName); err != nil {
+			return FinishResult{}, err
+		}
+		result.Merged = true
+		result.MergeTarget = targetBranch
+	}
+
+	if opts.Clean || opts.DeleteBranch {
+		summary, err := s.cleanRuns([]RunMetadata{meta}, opts.DeleteBranch, true)
+		if err != nil {
+			return FinishResult{}, err
+		}
+		if len(summary.Runs) == 1 {
+			result.WorktreeRemoved = summary.Runs[0].WorktreeRemoved
+			result.BranchDeleted = summary.Runs[0].BranchDeleted
+			result.MetadataRemoved = summary.Runs[0].MetadataRemoved
+		}
+	}
+
+	return result, nil
+}
+
+func (s *Service) Diff(runID string, stat bool) (string, error) {
+	meta, err := s.loadRun(runID)
+	if err != nil {
+		return "", err
+	}
+	return s.git.Diff(meta.WorktreePath, meta.BaseRef, meta.BranchName, stat)
 }
 
 func (s *Service) EnrichStatus(meta RunMetadata) (RunStatus, error) {
@@ -303,15 +422,17 @@ func (s *Service) loadRun(runID string) (RunMetadata, error) {
 	return s.readRunMetadata(path)
 }
 
-func (s *Service) cleanRuns(items []RunMetadata, deleteBranch bool) (CleanupSummary, error) {
+func (s *Service) cleanRuns(items []RunMetadata, deleteBranch bool, skipDown bool) (CleanupSummary, error) {
 	results := make([]CleanupResult, 0, len(items))
 	for _, item := range items {
-		env, err := s.cleanupEnv(item)
-		if err != nil {
-			return CleanupSummary{}, err
-		}
-		if err := s.docker.Down(item.ComposeFiles, env, dockerops.Streams{}); err != nil {
-			return CleanupSummary{}, err
+		if !skipDown {
+			env, err := s.cleanupEnv(item)
+			if err != nil {
+				return CleanupSummary{}, err
+			}
+			if err := s.docker.Down(item.ComposeFiles, env, dockerops.Streams{}); err != nil {
+				return CleanupSummary{}, err
+			}
 		}
 
 		result := CleanupResult{

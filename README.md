@@ -34,6 +34,8 @@ go install github.com/jamesdrando/alcatraz/cmd/alcatraz-mcp@latest
 alcatraz run
 alcatraz list
 alcatraz status
+alcatraz diff
+alcatraz finish
 alcatraz clean
 alcatraz config
 ```
@@ -44,6 +46,8 @@ Useful examples:
 alcatraz run
 alcatraz run --base-ref main -- --no-alt-screen
 alcatraz run --branch feature/sandbox-hardening
+alcatraz diff --stat
+alcatraz finish --merge --clean --delete-branch
 alcatraz list --json
 alcatraz status --json
 alcatraz clean --all --delete-branch
@@ -71,16 +75,16 @@ Config is intentionally non-secret. Keep secrets in a local `.env`, not in the c
 
 ## Runtime Layout
 
-To keep public repos clean, runtime state is stored under `.git/alcatraz/`, not in the working tree:
+To keep public repos clean while avoiding Git/tooling edge cases, Alcatraz splits runtime data in two places:
 
-- `.git/alcatraz/worktrees/`
 - `.git/alcatraz/runs/`
+- `.alcatraz/worktrees/`
 
 That means:
 
-- worktrees do not clutter the repo root
-- run metadata stays local
-- nothing under that runtime path is at risk of being committed accidentally
+- run metadata stays local under `.git`
+- worktrees stay outside `.git`, which keeps Git and editor tooling happier
+- the worktree path is still hidden and gitignored, so it does not clutter the normal repo view
 
 ## Secrets
 
@@ -108,7 +112,7 @@ go run ./cmd/alcatraz-mcp
 The MCP layer stays thin:
 
 - it discovers config the same way as the CLI
-- it keeps runtime state under `.git/alcatraz/`
+- it keeps metadata under `.git/alcatraz/` and worktrees under `.alcatraz/worktrees/`
 - it reuses `.env` and the same auth resolution rules
 - it does not require an existing Alcatraz container to already be running
 
@@ -192,5 +196,7 @@ That covers ChatGPT-authenticated Codex/OpenAI traffic plus common package insta
 
 - The CLI mounts a fresh git worktree into `/workspace` and creates a new branch automatically unless you provide one.
 - `alcatraz list` and `alcatraz status` are intended to be easy for humans and orchestration layers to consume.
+- `alcatraz diff <run-id>` lets you inspect a run without navigating into the worktree yourself.
+- `alcatraz finish <run-id>` stages and commits run changes for you, and can also merge into your current branch and clean up the run.
 - `alcatraz clean` removes worktrees and can optionally delete the run branches too.
 - If you need to inspect arbitrary external websites from inside the container, those domains must still be allowed explicitly.

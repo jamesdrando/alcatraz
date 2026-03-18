@@ -102,8 +102,11 @@ func Open(opts OpenOptions) (*Runtime, error) {
 	if err := os.MkdirAll(filepath.Join(stateDir, "runs"), 0o755); err != nil {
 		return nil, fmt.Errorf("create state dir: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(stateDir, "worktrees"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".alcatraz", "worktrees"), 0o755); err != nil {
 		return nil, fmt.Errorf("create worktree dir: %w", err)
+	}
+	if err := ensureGitExclude(gitDir, "/.alcatraz/worktrees/"); err != nil {
+		return nil, fmt.Errorf("update git exclude: %w", err)
 	}
 
 	return &Runtime{
@@ -122,7 +125,7 @@ func (r *Runtime) MetadataDir() string {
 }
 
 func (r *Runtime) WorktreeDir() string {
-	return filepath.Join(r.StateDir, "worktrees")
+	return filepath.Join(r.RepoRoot, ".alcatraz", "worktrees")
 }
 
 func (r *Runtime) MetadataPath(runID string) string {
@@ -262,4 +265,40 @@ func parseDotEnv(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("scan env file: %w", err)
 	}
 	return values, nil
+}
+
+func ensureGitExclude(gitDir, pattern string) error {
+	infoDir := filepath.Join(gitDir, "info")
+	if err := os.MkdirAll(infoDir, 0o755); err != nil {
+		return err
+	}
+
+	excludePath := filepath.Join(infoDir, "exclude")
+	current := ""
+	if data, err := os.ReadFile(excludePath); err == nil {
+		current = string(data)
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	lines := strings.Split(current, "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == pattern {
+			return nil
+		}
+	}
+
+	file, err := os.OpenFile(excludePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	if current != "" && !strings.HasSuffix(current, "\n") {
+		if _, err := file.WriteString("\n"); err != nil {
+			return err
+		}
+	}
+	_, err = file.WriteString(pattern + "\n")
+	return err
 }
