@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,23 @@ func TestCreateListAndCleanRun(t *testing.T) {
 	}
 	if _, err := os.Stat(meta.WorktreePath); err != nil {
 		t.Fatalf("worktree missing: %v", err)
+	}
+	if len(meta.ComposeFiles) != 2 {
+		t.Fatalf("unexpected compose file count: %+v", meta.ComposeFiles)
+	}
+	for _, composeFile := range meta.ComposeFiles {
+		if !filepath.IsAbs(composeFile) {
+			t.Fatalf("compose file is not absolute: %s", composeFile)
+		}
+		if !strings.HasPrefix(composeFile, runtime.StateDir+string(os.PathSeparator)) {
+			t.Fatalf("compose file should be staged under runtime state dir: %s", composeFile)
+		}
+		if composeFile == filepath.Join(repoRoot, filepath.Base(composeFile)) {
+			t.Fatalf("compose file should not be resolved from target repo root: %s", composeFile)
+		}
+		if _, err := os.Stat(composeFile); err != nil {
+			t.Fatalf("staged compose file missing: %v", err)
+		}
 	}
 
 	docker.runningProjects[meta.ComposeProject] = true
@@ -174,6 +192,29 @@ func TestFinishCommitsMergesAndCleans(t *testing.T) {
 	mergedFile := filepath.Join(repoRoot, "mcp.txt")
 	if _, err := os.Stat(mergedFile); err != nil {
 		t.Fatalf("merged file missing from repo root: %v", err)
+	}
+}
+
+func TestCreateRejectsUnknownBundledComposeAsset(t *testing.T) {
+	repoRoot := initRepo(t)
+	configPath := filepath.Join(repoRoot, ".alcatraz.json")
+	if err := os.WriteFile(configPath, []byte("{\"compose_files\":[\"custom.yaml\"]}\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := rtpkg.Open(rtpkg.OpenOptions{
+		RepoRoot: repoRoot,
+		Environ: []string{
+			"OPENAI_API_KEY=test-key",
+			"HOST_CODEX_BIN=/bin/sh",
+			"HOME=" + repoRoot,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected invalid compose asset error")
+	}
+	if !strings.Contains(err.Error(), "unsupported bundled compose asset") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

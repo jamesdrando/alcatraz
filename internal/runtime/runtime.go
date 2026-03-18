@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	assets "github.com/jamesdrando/alcatraz"
 	"github.com/jamesdrando/alcatraz/internal/config"
 	"github.com/jamesdrando/alcatraz/internal/dockerops"
 	"github.com/jamesdrando/alcatraz/internal/gitops"
@@ -30,13 +31,16 @@ type OpenOptions struct {
 }
 
 type Runtime struct {
-	RepoRoot string
-	GitDir   string
-	StateDir string
-	Config   config.Config
-	Env      map[string]string
-	Git      *gitops.Client
-	Docker   *dockerops.Client
+	RepoRoot           string
+	GitDir             string
+	StateDir           string
+	AssetsRoot         string
+	Config             config.Config
+	Env                map[string]string
+	Git                *gitops.Client
+	Docker             *dockerops.Client
+	composeFiles       []string
+	chatGPTComposeFile string
 }
 
 func Open(opts OpenOptions) (*Runtime, error) {
@@ -109,14 +113,30 @@ func Open(opts OpenOptions) (*Runtime, error) {
 		return nil, fmt.Errorf("update git exclude: %w", err)
 	}
 
+	assetsRoot, err := assets.Materialize(stateDir)
+	if err != nil {
+		return nil, fmt.Errorf("stage bundled assets: %w", err)
+	}
+	composeFiles, err := assets.ResolveComposeFiles(assetsRoot, cfg.ComposeFiles)
+	if err != nil {
+		return nil, err
+	}
+	chatGPTComposeFile, err := assets.ResolveComposeFile(assetsRoot, cfg.ChatGPTComposeFile)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Runtime{
-		RepoRoot: repoRoot,
-		GitDir:   gitDir,
-		StateDir: stateDir,
-		Config:   cfg,
-		Env:      env,
-		Git:      gitops.New(repoRoot),
-		Docker:   dockerops.New(repoRoot),
+		RepoRoot:           repoRoot,
+		GitDir:             gitDir,
+		StateDir:           stateDir,
+		AssetsRoot:         assetsRoot,
+		Config:             cfg,
+		Env:                env,
+		Git:                gitops.New(repoRoot),
+		Docker:             dockerops.New(repoRoot),
+		composeFiles:       composeFiles,
+		chatGPTComposeFile: chatGPTComposeFile,
 	}, nil
 }
 
@@ -133,9 +153,9 @@ func (r *Runtime) MetadataPath(runID string) string {
 }
 
 func (r *Runtime) ComposeFiles(authMode AuthMode) []string {
-	files := append([]string{}, r.Config.ComposeFiles...)
+	files := append([]string{}, r.composeFiles...)
 	if authMode == AuthModeChatGPT {
-		files = append(files, r.Config.ChatGPTComposeFile)
+		files = append(files, r.chatGPTComposeFile)
 	}
 	return files
 }

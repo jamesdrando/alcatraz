@@ -28,6 +28,8 @@ go install github.com/jamesdrando/alcatraz/cmd/alcatraz@latest
 go install github.com/jamesdrando/alcatraz/cmd/alcatraz-mcp@latest
 ```
 
+The installed binaries are self-contained for Docker/Compose assets. `alcatraz run` can be launched from another git repo without copying `compose.yaml`, Dockerfiles, or entrypoint scripts into that target repo.
+
 ## Commands
 
 ```bash
@@ -57,6 +59,8 @@ alcatraz clean --all --delete-branch
 
 `alcatraz run` works without a config file and uses built-in defaults.
 
+Config discovery still happens in the target repo. The installed binary stages its bundled Docker/Compose assets under `.git/alcatraz/assets/` and uses those staged files at runtime.
+
 If a repo wants explicit config, the CLI looks for these files in order:
 
 1. `.alcatraz.json`
@@ -73,16 +77,20 @@ A sample config lives at [alcatraz.example.json](/workspace/alcatraz.example.jso
 
 Config is intentionally non-secret. Keep secrets in a local `.env`, not in the config file.
 
+If you set `compose_files` or `chatgpt_compose_file`, those values now refer to bundled asset names such as `compose.yaml`, `compose.codex.yaml`, and `compose.chatgpt.yaml`, not arbitrary files in the target repo.
+
 ## Runtime Layout
 
 To keep public repos clean while avoiding Git/tooling edge cases, Alcatraz splits runtime data in two places:
 
 - `.git/alcatraz/runs/`
+- `.git/alcatraz/assets/`
 - `.alcatraz/worktrees/`
 
 That means:
 
 - run metadata stays local under `.git`
+- bundled Docker/Compose assets stay local under `.git`
 - worktrees stay outside `.git`, which keeps Git and editor tooling happier
 - the worktree path is still hidden and gitignored, so it does not clutter the normal repo view
 
@@ -112,6 +120,7 @@ go run ./cmd/alcatraz-mcp
 The MCP layer stays thin:
 
 - it discovers config the same way as the CLI
+- it stages the same bundled Docker/Compose assets under `.git/alcatraz/assets/`
 - it keeps metadata under `.git/alcatraz/` and worktrees under `.alcatraz/worktrees/`
 - it reuses `.env` and the same auth resolution rules
 - it does not require an existing Alcatraz container to already be running
