@@ -99,6 +99,7 @@ type dockerClient interface {
 	Down(composeFiles, env []string, streams dockerops.Streams) error
 	RunService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error
 	ExecService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error
+	ExecServiceInteractive(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error
 	ProjectRunning(project string) (bool, error)
 }
 
@@ -209,7 +210,7 @@ func (s *Service) RunInteractive(meta RunMetadata, extraAgentArgs []string, stre
 		return err
 	}
 
-	if err := s.docker.UpDetached(meta.ComposeFiles, env, streams, "egress-proxy"); err != nil {
+	if err := s.docker.UpDetached(meta.ComposeFiles, env, streams, "egress-proxy", "agent"); err != nil {
 		return err
 	}
 	defer func() {
@@ -217,7 +218,7 @@ func (s *Service) RunInteractive(meta RunMetadata, extraAgentArgs []string, stre
 	}()
 
 	command := append(append([]string{}, s.runtime.Config.AgentCommand...), extraAgentArgs...)
-	return s.docker.RunService(meta.ComposeFiles, env, streams, "agent", command)
+	return s.docker.ExecServiceInteractive(meta.ComposeFiles, env, streams, "agent", command)
 }
 
 func (s *Service) ListStatuses() ([]RunStatus, error) {

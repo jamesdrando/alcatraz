@@ -14,14 +14,19 @@ import (
 )
 
 type fakeDocker struct {
-	runningProjects map[string]bool
-	downCalls       int
-	upEnv           []string
-	runEnv          []string
+	runningProjects      map[string]bool
+	downCalls            int
+	upEnv                []string
+	runEnv               []string
+	upServices           []string
+	runCalls             int
+	execCalls            int
+	execInteractiveCalls int
 }
 
 func (f *fakeDocker) UpDetached(composeFiles, env []string, streams dockerops.Streams, services ...string) error {
 	f.upEnv = append([]string{}, env...)
+	f.upServices = append([]string{}, services...)
 	return nil
 }
 
@@ -31,11 +36,19 @@ func (f *fakeDocker) Down(composeFiles, env []string, streams dockerops.Streams)
 }
 
 func (f *fakeDocker) RunService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error {
+	f.runCalls++
 	f.runEnv = append([]string{}, env...)
 	return nil
 }
 
 func (f *fakeDocker) ExecService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error {
+	f.execCalls++
+	f.runEnv = append([]string{}, env...)
+	return nil
+}
+
+func (f *fakeDocker) ExecServiceInteractive(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error {
+	f.execInteractiveCalls++
 	f.runEnv = append([]string{}, env...)
 	return nil
 }
@@ -254,6 +267,15 @@ func TestRunInteractivePassesDependencySettingsToCompose(t *testing.T) {
 	}
 	if !hasEnvValue(docker.upEnv, "ALCATRAZ_CONTAINER_RUNTIME", "runc") {
 		t.Fatalf("missing container runtime in compose env: %+v", docker.upEnv)
+	}
+	if len(docker.upServices) != 2 || docker.upServices[0] != "egress-proxy" || docker.upServices[1] != "agent" {
+		t.Fatalf("expected interactive run to start egress-proxy and agent services, got %+v", docker.upServices)
+	}
+	if docker.runCalls != 0 {
+		t.Fatalf("expected interactive run not to use compose run, got %d calls", docker.runCalls)
+	}
+	if docker.execInteractiveCalls != 1 {
+		t.Fatalf("expected one interactive exec call, got %d", docker.execInteractiveCalls)
 	}
 }
 

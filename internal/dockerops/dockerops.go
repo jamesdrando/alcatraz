@@ -46,6 +46,12 @@ func (c *Client) ExecService(composeFiles, env []string, streams Streams, servic
 	return c.runDocker(args, env, streams)
 }
 
+func (c *Client) ExecServiceInteractive(composeFiles, env []string, streams Streams, service string, command []string) error {
+	args := c.composeArgs(composeFiles, "exec", service)
+	args = append(args, command...)
+	return c.runDocker(args, env, streams)
+}
+
 func (c *Client) ProjectRunning(project string) (bool, error) {
 	cmd := exec.Command("docker", "ps", "--filter", "label=com.docker.compose.project="+project, "--format", "{{.ID}}")
 	var stdout bytes.Buffer
