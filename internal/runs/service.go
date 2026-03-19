@@ -101,6 +101,8 @@ type dockerClient interface {
 	RunService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error
 	ExecService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error
 	ExecServiceInteractive(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error
+	ExecServiceOutput(composeFiles, env []string, service string, command []string) (string, error)
+	ServiceLogs(composeFiles, env []string, service string, tailLines int) (string, error)
 	ServiceNetworkIP(composeFiles, env []string, service, network string) (string, error)
 	ProjectRunning(project string) (bool, error)
 }
@@ -207,6 +209,9 @@ func (s *Service) StartPersistent(meta RunMetadata, extraAgentArgs []string) err
 	if err := s.docker.UpDetached(meta.ComposeFiles, env, dockerops.Streams{}, "agent"); err != nil {
 		return err
 	}
+	if err := s.runNetworkPreflight(meta, env); err != nil {
+		return err
+	}
 
 	if len(extraAgentArgs) == 0 {
 		return nil
@@ -233,6 +238,9 @@ func (s *Service) RunInteractive(meta RunMetadata, extraAgentArgs []string, stre
 		return err
 	}
 	if err := s.docker.UpDetached(meta.ComposeFiles, env, streams, "agent"); err != nil {
+		return err
+	}
+	if err := s.runNetworkPreflight(meta, env); err != nil {
 		return err
 	}
 
@@ -609,18 +617,23 @@ func (s *Service) composeEnv(meta RunMetadata, codexBin string, proxyURL string)
 	if err != nil {
 		return nil, err
 	}
+	egressProxyRuntime, err := s.runtime.ResolveEgressProxyRuntime()
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(proxyURL) == "" {
 		proxyURL = "http://egress-proxy:3128"
 	}
 
 	extra := map[string]string{
-		"ALCATRAZ_CONTAINER_RUNTIME": containerRuntime,
-		"ALCATRAZ_EGRESS_DNS_1":      egressDNSServers()[0],
-		"ALCATRAZ_EGRESS_DNS_2":      egressDNSServers()[1],
-		"ALCATRAZ_EGRESS_PROXY":      proxyURL,
-		"ALCATRAZ_WORKSPACE":         meta.WorktreePath,
-		"COMPOSE_PROJECT_NAME":       meta.ComposeProject,
-		"HOST_CODEX_BIN":             codexBin,
+		"ALCATRAZ_CONTAINER_RUNTIME":    containerRuntime,
+		"ALCATRAZ_EGRESS_DNS_1":         egressDNSServers()[0],
+		"ALCATRAZ_EGRESS_DNS_2":         egressDNSServers()[1],
+		"ALCATRAZ_EGRESS_PROXY":         proxyURL,
+		"ALCATRAZ_EGRESS_PROXY_RUNTIME": egressProxyRuntime,
+		"ALCATRAZ_WORKSPACE":            meta.WorktreePath,
+		"COMPOSE_PROJECT_NAME":          meta.ComposeProject,
+		"HOST_CODEX_BIN":                codexBin,
 	}
 
 	if value := joinCSV(s.runtime.Config.DependencyProfiles); value != "" {
@@ -640,6 +653,111 @@ func (s *Service) composeEnv(meta RunMetadata, codexBin string, proxyURL string)
 	}
 
 	return s.runtime.CommandEnv(extra), nil
+}
+
+func (s *Service) runNetworkPreflight(meta RunMetadata, env []string) error {
+	host := preflightHost(meta.AuthMode)
+	if host == "" {
+		return nil
+	}
+
+	var lastOutput string
+	var lastErr error
+	command := preflightCurlCommand(host)
+	for attempt := 1; attempt <= 3; attempt++ {
+		output, err := s.docker.ExecServiceOutput(meta.ComposeFiles, env, "agent", command)
+		if err == nil {
+			return nil
+		}
+		lastOutput = strings.TrimSpace(output)
+		lastErr = err
+		if attempt < 3 {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+	return s.preflightError(meta, env, host, lastOutput, lastErr)
+}
+
+func (s *Service) preflightError(meta RunMetadata, env []string, host, curlOutput string, cause error) error {
+	sections := []string{
+		fmt.Sprintf("network preflight failed for %s", host),
+	}
+
+	if proxyEnv, err := s.docker.ExecServiceOutput(meta.ComposeFiles, env, "agent", agentProxyEnvCommand()); err == nil {
+		proxyEnv = strings.TrimSpace(proxyEnv)
+		if proxyEnv != "" {
+			sections = append(sections, "agent proxy env:\n"+proxyEnv)
+		}
+	}
+
+	if curlOutput != "" {
+		sections = append(sections, "agent curl output:\n"+curlOutput)
+	}
+
+	if resolver, err := s.docker.ExecServiceOutput(meta.ComposeFiles, env, "egress-proxy", proxyResolvConfCommand()); err == nil {
+		resolver = strings.TrimSpace(resolver)
+		if resolver != "" {
+			sections = append(sections, "egress-proxy resolv.conf:\n"+resolver)
+		}
+	}
+
+	if lookup, err := s.docker.ExecServiceOutput(meta.ComposeFiles, env, "egress-proxy", proxyLookupCommand(host)); err == nil {
+		lookup = strings.TrimSpace(lookup)
+		if lookup == "" {
+			lookup = "<no records>"
+		}
+		sections = append(sections, fmt.Sprintf("egress-proxy DNS lookup for %s:\n%s", host, lookup))
+	}
+
+	if logs, err := s.docker.ServiceLogs(meta.ComposeFiles, env, "egress-proxy", 30); err == nil {
+		logs = strings.TrimSpace(logs)
+		if logs != "" {
+			sections = append(sections, "egress-proxy logs (tail 30):\n"+logs)
+		}
+	}
+
+	message := strings.Join(sections, "\n\n")
+	if cause != nil {
+		return fmt.Errorf("%s\n\nroot cause: %w", message, cause)
+	}
+	return errors.New(message)
+}
+
+func preflightHost(mode rtpkg.AuthMode) string {
+	switch mode {
+	case rtpkg.AuthModeChatGPT:
+		return "chatgpt.com"
+	case rtpkg.AuthModeAPIKey:
+		return "api.openai.com"
+	default:
+		return ""
+	}
+}
+
+func preflightCurlCommand(host string) []string {
+	return []string{
+		"sh", "-lc",
+		fmt.Sprintf("curl -Ivs --connect-timeout 3 --max-time 8 https://%s 2>&1", host),
+	}
+}
+
+func agentProxyEnvCommand() []string {
+	return []string{
+		"sh", "-lc",
+		`printf 'HTTPS_PROXY=%s\nHTTP_PROXY=%s\n' "$HTTPS_PROXY" "$HTTP_PROXY"`,
+	}
+}
+
+func proxyResolvConfCommand() []string {
+	return []string{"sh", "-lc", "cat /etc/resolv.conf"}
+}
+
+func proxyLookupCommand(host string) []string {
+	return []string{
+		"sh", "-lc",
+		fmt.Sprintf("getent hosts %s || true", host),
+	}
 }
 
 func joinCSV(values []string) string {

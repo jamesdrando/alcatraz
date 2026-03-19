@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +24,11 @@ type fakeDocker struct {
 	runCalls             int
 	execCalls            int
 	execInteractiveCalls int
+	execOutputCalls      int
 	serviceNetworkIP     string
+	execOutputs          map[string]string
+	execOutputErrors     map[string]error
+	serviceLogs          map[string]string
 }
 
 func (f *fakeDocker) UpDetached(composeFiles, env []string, streams dockerops.Streams, services ...string) error {
@@ -54,6 +59,22 @@ func (f *fakeDocker) ExecServiceInteractive(composeFiles, env []string, streams 
 	f.execInteractiveCalls++
 	f.runEnv = append([]string{}, env...)
 	return nil
+}
+
+func (f *fakeDocker) ExecServiceOutput(composeFiles, env []string, service string, command []string) (string, error) {
+	f.execOutputCalls++
+	key := dockerCommandKey(service, command)
+	if output, ok := f.execOutputs[key]; ok {
+		return output, f.execOutputErrors[key]
+	}
+	return "", f.execOutputErrors[key]
+}
+
+func (f *fakeDocker) ServiceLogs(composeFiles, env []string, service string, tailLines int) (string, error) {
+	if f.serviceLogs == nil {
+		return "", nil
+	}
+	return f.serviceLogs[service], nil
 }
 
 func (f *fakeDocker) ServiceNetworkIP(composeFiles, env []string, service, network string) (string, error) {
@@ -278,6 +299,9 @@ func TestRunInteractivePassesDependencySettingsToCompose(t *testing.T) {
 	if !hasEnvValue(docker.upEnv, "ALCATRAZ_CONTAINER_RUNTIME", "runc") {
 		t.Fatalf("missing container runtime in compose env: %+v", docker.upEnv)
 	}
+	if !hasEnvValue(docker.upEnv, "ALCATRAZ_EGRESS_PROXY_RUNTIME", "runc") {
+		t.Fatalf("missing egress proxy runtime in compose env: %+v", docker.upEnv)
+	}
 	if !hasEnvValue(docker.upEnv, "ALCATRAZ_EGRESS_PROXY", "http://192.168.80.2:3128") {
 		t.Fatalf("missing resolved egress proxy URL in compose env: %+v", docker.upEnv)
 	}
@@ -298,6 +322,65 @@ func TestRunInteractivePassesDependencySettingsToCompose(t *testing.T) {
 	}
 	if docker.execInteractiveCalls != 1 {
 		t.Fatalf("expected one interactive exec call, got %d", docker.execInteractiveCalls)
+	}
+	if docker.execOutputCalls == 0 {
+		t.Fatal("expected network preflight to run before interactive exec")
+	}
+}
+
+func TestRunInteractiveReportsNetworkPreflightFailure(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	runtime.Env["OPENAI_API_KEY"] = ""
+	hostCodexHome := t.TempDir()
+	if err := os.MkdirAll(hostCodexHome, 0o755); err != nil {
+		t.Fatalf("mkdir codex home: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hostCodexHome, "auth.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+	runtime.Env["HOST_CODEX_HOME"] = hostCodexHome
+
+	docker := &fakeDocker{
+		runningProjects: map[string]bool{},
+		execOutputs: map[string]string{
+			dockerCommandKey("agent", preflightCurlCommand("chatgpt.com")):      "curl: (56) CONNECT tunnel failed, response 500",
+			dockerCommandKey("agent", agentProxyEnvCommand()):                   "HTTPS_PROXY=http://192.168.80.2:3128\nHTTP_PROXY=http://192.168.80.2:3128",
+			dockerCommandKey("egress-proxy", proxyResolvConfCommand()):          "nameserver 127.0.0.11",
+			dockerCommandKey("egress-proxy", proxyLookupCommand("chatgpt.com")): "",
+		},
+		execOutputErrors: map[string]error{
+			dockerCommandKey("agent", preflightCurlCommand("chatgpt.com")): fmt.Errorf("exit status 56"),
+		},
+		serviceLogs: map[string]string{
+			"egress-proxy": "NONE_NONE/500 0 CONNECT chatgpt.com:443 - HIER_NONE/- -",
+		},
+	}
+
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+	service.newRunID = func() string { return "20260319-000004-dead" }
+
+	meta, err := service.Create(CreateOptions{})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	err = service.RunInteractive(meta, nil, dockerops.Streams{})
+	if err == nil {
+		t.Fatal("expected network preflight failure")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "network preflight failed for chatgpt.com") {
+		t.Fatalf("missing preflight header: %s", message)
+	}
+	if !strings.Contains(message, "curl: (56) CONNECT tunnel failed, response 500") {
+		t.Fatalf("missing curl diagnostics: %s", message)
+	}
+	if !strings.Contains(message, "egress-proxy logs (tail 30):") {
+		t.Fatalf("missing proxy logs: %s", message)
+	}
+	if docker.execInteractiveCalls != 0 {
+		t.Fatalf("expected interactive exec not to run after preflight failure, got %d", docker.execInteractiveCalls)
 	}
 }
 
@@ -435,6 +518,7 @@ func TestCreateRejectsUnknownBundledComposeAsset(t *testing.T) {
 		RepoRoot: repoRoot,
 		Environ: []string{
 			"ALCATRAZ_CONTAINER_RUNTIME=runc",
+			"ALCATRAZ_EGRESS_PROXY_RUNTIME=runc",
 			"OPENAI_API_KEY=test-key",
 			"HOST_CODEX_BIN=/bin/sh",
 			"HOME=" + repoRoot,
@@ -501,6 +585,10 @@ func hasEnvValue(env []string, key, want string) bool {
 		}
 	}
 	return false
+}
+
+func dockerCommandKey(service string, command []string) string {
+	return service + "\x00" + strings.Join(command, "\x00")
 }
 
 func hasEnvKey(env []string, key string) bool {

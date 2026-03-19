@@ -249,6 +249,21 @@ func (r *Runtime) ResolveContainerRuntime() (string, error) {
 	return r.containerRuntime, nil
 }
 
+func (r *Runtime) ResolveEgressProxyRuntime() (string, error) {
+	if value := strings.TrimSpace(r.Env["ALCATRAZ_EGRESS_PROXY_RUNTIME"]); value != "" {
+		return value, nil
+	}
+
+	defaultRuntime, err := detectDefaultContainerRuntime()
+	if err != nil {
+		return "", err
+	}
+	if defaultRuntime != "" {
+		return defaultRuntime, nil
+	}
+	return "runc", nil
+}
+
 func (r *Runtime) ResolveCodexBin() (string, error) {
 	if path := r.Env["HOST_CODEX_BIN"]; path != "" {
 		info, err := os.Stat(path)
@@ -382,33 +397,9 @@ func environmentMap(entries []string) map[string]string {
 }
 
 func detectContainerRuntime() (string, error) {
-	const dockerInfoFormat = "{{range $name, $_ := .Runtimes}}{{$name}}{{println}}{{end}}DEFAULT={{.DefaultRuntime}}"
-
-	output, err := exec.Command("docker", "info", "--format", dockerInfoFormat).CombinedOutput()
+	runtimes, defaultRuntime, err := inspectDockerRuntimes()
 	if err != nil {
-		message := strings.TrimSpace(string(output))
-		if message != "" {
-			return "", fmt.Errorf("inspect docker runtimes: %w: %s", err, message)
-		}
-		return "", fmt.Errorf("inspect docker runtimes: %w", err)
-	}
-
-	runtimes := map[string]struct{}{}
-	defaultRuntime := ""
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "DEFAULT=") {
-			defaultRuntime = strings.TrimSpace(strings.TrimPrefix(line, "DEFAULT="))
-			continue
-		}
-		runtimes[line] = struct{}{}
-	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read docker runtime probe: %w", err)
+		return "", err
 	}
 
 	if _, ok := runtimes["runsc"]; ok {
@@ -431,6 +422,60 @@ func detectContainerRuntime() (string, error) {
 	}
 	sort.Strings(names)
 	return "", fmt.Errorf("docker did not report a default runtime; available runtimes: %s", strings.Join(names, ", "))
+}
+
+func detectDefaultContainerRuntime() (string, error) {
+	runtimes, defaultRuntime, err := inspectDockerRuntimes()
+	if err != nil {
+		return "", err
+	}
+	if defaultRuntime != "" {
+		return defaultRuntime, nil
+	}
+	if _, ok := runtimes["runc"]; ok {
+		return "runc", nil
+	}
+	if len(runtimes) == 0 {
+		return "", errors.New("docker did not report any registered container runtimes")
+	}
+	names := make([]string, 0, len(runtimes))
+	for name := range runtimes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return "", fmt.Errorf("docker did not report a default runtime; available runtimes: %s", strings.Join(names, ", "))
+}
+
+func inspectDockerRuntimes() (map[string]struct{}, string, error) {
+	const dockerInfoFormat = "{{range $name, $_ := .Runtimes}}{{$name}}{{println}}{{end}}DEFAULT={{.DefaultRuntime}}"
+
+	output, err := exec.Command("docker", "info", "--format", dockerInfoFormat).CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message != "" {
+			return nil, "", fmt.Errorf("inspect docker runtimes: %w: %s", err, message)
+		}
+		return nil, "", fmt.Errorf("inspect docker runtimes: %w", err)
+	}
+
+	runtimes := map[string]struct{}{}
+	defaultRuntime := ""
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "DEFAULT=") {
+			defaultRuntime = strings.TrimSpace(strings.TrimPrefix(line, "DEFAULT="))
+			continue
+		}
+		runtimes[line] = struct{}{}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, "", fmt.Errorf("read docker runtime probe: %w", err)
+	}
+	return runtimes, defaultRuntime, nil
 }
 
 func parseDotEnv(path string) (map[string]string, error) {

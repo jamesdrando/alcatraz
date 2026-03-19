@@ -12,8 +12,20 @@ func TestComposeYamlDefaultsToRunscRuntime(t *testing.T) {
 	}
 
 	want := []byte("runtime: ${ALCATRAZ_CONTAINER_RUNTIME:-runsc}")
-	if got := bytes.Count(data, want); got != 2 {
-		t.Fatalf("expected runtime declaration on both services, got %d", got)
+	if got := bytes.Count(data, want); got != 1 {
+		t.Fatalf("expected runsc runtime declaration for agent only, got %d", got)
+	}
+}
+
+func TestComposeYamlDefaultsProxyToSeparateRuntime(t *testing.T) {
+	data, err := bundledFS.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatalf("read compose.yaml: %v", err)
+	}
+
+	want := []byte("runtime: ${ALCATRAZ_EGRESS_PROXY_RUNTIME:-runc}")
+	if got := bytes.Count(data, want); got != 1 {
+		t.Fatalf("expected separate proxy runtime declaration, got %d", got)
 	}
 }
 

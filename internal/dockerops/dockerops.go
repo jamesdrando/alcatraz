@@ -6,6 +6,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -50,6 +51,20 @@ func (c *Client) ExecServiceInteractive(composeFiles, env []string, streams Stre
 	args := c.composeArgs(composeFiles, "exec", service)
 	args = append(args, command...)
 	return c.runDocker(args, env, streams)
+}
+
+func (c *Client) ExecServiceOutput(composeFiles, env []string, service string, command []string) (string, error) {
+	args := c.composeArgs(composeFiles, "exec", "-T", service)
+	args = append(args, command...)
+	return c.runDockerCombinedOutput(args, env)
+}
+
+func (c *Client) ServiceLogs(composeFiles, env []string, service string, tailLines int) (string, error) {
+	if tailLines <= 0 {
+		tailLines = 50
+	}
+	args := c.composeArgs(composeFiles, "logs", "--no-color", "--tail", strconv.Itoa(tailLines), service)
+	return c.runDockerCombinedOutput(args, env)
 }
 
 func (c *Client) ServiceNetworkIP(composeFiles, env []string, service, network string) (string, error) {
@@ -160,4 +175,32 @@ func (c *Client) runDockerOutput(args, env []string) (string, error) {
 		return "", err
 	}
 	return stdout.String(), nil
+}
+
+func (c *Client) runDockerCombinedOutput(args, env []string) (string, error) {
+	cmd := exec.Command("docker", args...)
+	cmd.Dir = c.RepoRoot
+	cmd.Env = env
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return combineCommandOutput(stdout.String(), stderr.String()), err
+	}
+	return combineCommandOutput(stdout.String(), stderr.String()), nil
+}
+
+func combineCommandOutput(stdout, stderr string) string {
+	stdout = strings.TrimSpace(stdout)
+	stderr = strings.TrimSpace(stderr)
+	switch {
+	case stdout != "" && stderr != "":
+		return stdout + "\n" + stderr
+	case stdout != "":
+		return stdout
+	default:
+		return stderr
+	}
 }

@@ -49,10 +49,10 @@ services:
     build:
       context: .
       dockerfile: docker/egress-proxy/Dockerfile
-    runtime: ${ALCATRAZ_CONTAINER_RUNTIME:-runsc}
+    runtime: ${ALCATRAZ_EGRESS_PROXY_RUNTIME:-runc}
     user: "proxy:proxy"
     environment:
-      SQUID_ALLOWED_DOMAINS: ${SQUID_ALLOWED_DOMAINS:-api.openai.com chatgpt.com auth.openai.com files.oaiusercontent.com deb.debian.org security.debian.org registry.npmjs.org pypi.org files.pythonhosted.org crates.io index.crates.io static.crates.io bun.com bun.sh}
+      SQUID_ALLOWED_DOMAINS: ${SQUID_ALLOWED_DOMAINS:-api.openai.com chatgpt.com .chatgpt.com auth.openai.com files.oaiusercontent.com deb.debian.org security.debian.org registry.npmjs.org pypi.org files.pythonhosted.org crates.io index.crates.io static.crates.io bun.com bun.sh}
     dns:
       - ${ALCATRAZ_EGRESS_DNS_1:-1.1.1.1}
       - ${ALCATRAZ_EGRESS_DNS_2:-8.8.8.8}

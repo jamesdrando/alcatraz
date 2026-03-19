@@ -46,6 +46,33 @@ func TestResolveContainerRuntimeHonorsExplicitOverride(t *testing.T) {
 	}
 }
 
+func TestResolveEgressProxyRuntimeUsesDockerDefault(t *testing.T) {
+	installFakeDocker(t, "io.containerd.runc.v2\nrunsc\nDEFAULT=runc\n")
+
+	rt := &Runtime{Env: map[string]string{}}
+	got, err := rt.ResolveEgressProxyRuntime()
+	if err != nil {
+		t.Fatalf("ResolveEgressProxyRuntime() error = %v", err)
+	}
+	if got != "runc" {
+		t.Fatalf("ResolveEgressProxyRuntime() = %q, want %q", got, "runc")
+	}
+}
+
+func TestResolveEgressProxyRuntimeHonorsExplicitOverride(t *testing.T) {
+	rt := &Runtime{Env: map[string]string{
+		"ALCATRAZ_EGRESS_PROXY_RUNTIME": "runsc",
+	}}
+
+	got, err := rt.ResolveEgressProxyRuntime()
+	if err != nil {
+		t.Fatalf("ResolveEgressProxyRuntime() error = %v", err)
+	}
+	if got != "runsc" {
+		t.Fatalf("ResolveEgressProxyRuntime() = %q, want %q", got, "runsc")
+	}
+}
+
 func installFakeDocker(t *testing.T, output string) {
 	t.Helper()
 
