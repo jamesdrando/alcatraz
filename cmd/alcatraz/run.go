@@ -89,6 +89,9 @@ func handleRun(args []string) error {
 
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
+		fmt.Fprintf(os.Stderr, "[alcatraz] agent exited with code %d\n", exitErr.ExitCode())
+		fmt.Fprintf(os.Stderr, "[alcatraz] compose project preserved for inspection: %s\n", meta.ComposeProject)
+		fmt.Fprintf(os.Stderr, "[alcatraz] worktree preserved at: %s\n", meta.WorktreePath)
 		return exitErr
 	}
 	return err

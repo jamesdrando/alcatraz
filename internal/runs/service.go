@@ -225,27 +225,37 @@ func (s *Service) RunInteractive(meta RunMetadata, extraAgentArgs []string, stre
 	if err != nil {
 		return err
 	}
+	cleanup := true
 
 	if err := s.docker.UpDetached(meta.ComposeFiles, bootstrapEnv, streams, "egress-proxy"); err != nil {
 		return err
 	}
 	defer func() {
-		_ = s.docker.Down(meta.ComposeFiles, bootstrapEnv, streams)
+		if cleanup {
+			_ = s.docker.Down(meta.ComposeFiles, bootstrapEnv, streams)
+		}
 	}()
 
 	env, err := s.runEnvWithResolvedProxy(meta, bootstrapEnv)
 	if err != nil {
+		cleanup = false
 		return err
 	}
 	if err := s.docker.UpDetached(meta.ComposeFiles, env, streams, "agent"); err != nil {
+		cleanup = false
 		return err
 	}
 	if err := s.runNetworkPreflight(meta, env); err != nil {
-		return err
+		cleanup = false
+		return fmt.Errorf("%w\n\ncompose project preserved for inspection: %s", err, meta.ComposeProject)
 	}
 
 	command := append(append([]string{}, s.runtime.Config.AgentCommand...), extraAgentArgs...)
-	return s.docker.ExecServiceInteractive(meta.ComposeFiles, env, streams, "agent", command)
+	if err := s.docker.ExecServiceInteractive(meta.ComposeFiles, env, streams, "agent", command); err != nil {
+		cleanup = false
+		return err
+	}
+	return nil
 }
 
 func (s *Service) ListStatuses() ([]RunStatus, error) {

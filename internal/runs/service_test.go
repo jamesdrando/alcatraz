@@ -26,6 +26,7 @@ type fakeDocker struct {
 	execInteractiveCalls int
 	execOutputCalls      int
 	serviceNetworkIP     string
+	execInteractiveErr   error
 	execOutputs          map[string]string
 	execOutputErrors     map[string]error
 	serviceLogs          map[string]string
@@ -58,7 +59,7 @@ func (f *fakeDocker) ExecService(composeFiles, env []string, streams dockerops.S
 func (f *fakeDocker) ExecServiceInteractive(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error {
 	f.execInteractiveCalls++
 	f.runEnv = append([]string{}, env...)
-	return nil
+	return f.execInteractiveErr
 }
 
 func (f *fakeDocker) ExecServiceOutput(composeFiles, env []string, service string, command []string) (string, error) {
@@ -379,8 +380,38 @@ func TestRunInteractiveReportsNetworkPreflightFailure(t *testing.T) {
 	if !strings.Contains(message, "egress-proxy logs (tail 30):") {
 		t.Fatalf("missing proxy logs: %s", message)
 	}
+	if !strings.Contains(message, "compose project preserved for inspection: "+meta.ComposeProject) {
+		t.Fatalf("missing preserved project hint: %s", message)
+	}
 	if docker.execInteractiveCalls != 0 {
 		t.Fatalf("expected interactive exec not to run after preflight failure, got %d", docker.execInteractiveCalls)
+	}
+	if docker.downCalls != 0 {
+		t.Fatalf("expected failed preflight to preserve containers, got %d down calls", docker.downCalls)
+	}
+}
+
+func TestRunInteractivePreservesContainersWhenAgentCommandFails(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{
+		runningProjects:    map[string]bool{},
+		execInteractiveErr: fmt.Errorf("exit status 1"),
+	}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+	service.newRunID = func() string { return "20260319-000005-beef" }
+
+	meta, err := service.Create(CreateOptions{})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	err = service.RunInteractive(meta, nil, dockerops.Streams{})
+	if err == nil {
+		t.Fatal("expected interactive exec failure")
+	}
+	if docker.downCalls != 0 {
+		t.Fatalf("expected failed interactive exec to preserve containers, got %d down calls", docker.downCalls)
 	}
 }
 
