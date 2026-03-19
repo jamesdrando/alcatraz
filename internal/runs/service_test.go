@@ -16,9 +16,12 @@ import (
 type fakeDocker struct {
 	runningProjects map[string]bool
 	downCalls       int
+	upEnv           []string
+	runEnv          []string
 }
 
 func (f *fakeDocker) UpDetached(composeFiles, env []string, streams dockerops.Streams, services ...string) error {
+	f.upEnv = append([]string{}, env...)
 	return nil
 }
 
@@ -28,10 +31,12 @@ func (f *fakeDocker) Down(composeFiles, env []string, streams dockerops.Streams)
 }
 
 func (f *fakeDocker) RunService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error {
+	f.runEnv = append([]string{}, env...)
 	return nil
 }
 
 func (f *fakeDocker) ExecService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error {
+	f.runEnv = append([]string{}, env...)
 	return nil
 }
 
@@ -214,6 +219,41 @@ func TestCreatePreservesExistingEnvFile(t *testing.T) {
 	}
 }
 
+func TestRunInteractivePassesDependencySettingsToCompose(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	runtime.Config.DependencyProfiles = []string{"typescript", "python"}
+	runtime.Config.NodePackages = []string{"hono", "decimal.js"}
+	runtime.Config.PythonPackages = []string{"fastapi", "sqlmodel", "uv"}
+	runtime.Config.GoModules = []string{"github.com/jackc/pgx/v5@v5.7.1"}
+
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+	service.newRunID = func() string { return "20260318-000004-dead" }
+
+	meta, err := service.Create(CreateOptions{})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := service.RunInteractive(meta, nil, dockerops.Streams{}); err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+
+	if !hasEnvValue(docker.upEnv, "ALCATRAZ_DEP_PROFILES", "typescript,python") {
+		t.Fatalf("missing dependency profiles in compose env: %+v", docker.upEnv)
+	}
+	if !hasEnvValue(docker.upEnv, "ALCATRAZ_NODE_PACKAGES", "hono,decimal.js") {
+		t.Fatalf("missing node packages in compose env: %+v", docker.upEnv)
+	}
+	if !hasEnvValue(docker.upEnv, "ALCATRAZ_PYTHON_PACKAGES", "fastapi,sqlmodel,uv") {
+		t.Fatalf("missing python packages in compose env: %+v", docker.upEnv)
+	}
+	if !hasEnvValue(docker.upEnv, "ALCATRAZ_GO_MODULES", "github.com/jackc/pgx/v5@v5.7.1") {
+		t.Fatalf("missing go modules in compose env: %+v", docker.upEnv)
+	}
+}
+
 func TestFinishCommitsMergesAndCleans(t *testing.T) {
 	repoRoot := initRepo(t)
 	runtime := newTestRuntime(t, repoRoot)
@@ -377,6 +417,16 @@ func gitBranchExists(t *testing.T, repoRoot, branchName string) bool {
 	cmd.Dir = repoRoot
 	err := cmd.Run()
 	return err == nil
+}
+
+func hasEnvValue(env []string, key, want string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) && strings.TrimPrefix(entry, prefix) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func runCmd(t *testing.T, dir string, name string, args ...string) {

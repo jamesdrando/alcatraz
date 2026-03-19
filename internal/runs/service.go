@@ -577,11 +577,46 @@ func (s *Service) cleanupEnv(meta RunMetadata) ([]string, error) {
 }
 
 func (s *Service) composeEnv(meta RunMetadata, codexBin string) []string {
-	return s.runtime.CommandEnv(map[string]string{
+	extra := map[string]string{
 		"ALCATRAZ_WORKSPACE":   meta.WorktreePath,
 		"COMPOSE_PROJECT_NAME": meta.ComposeProject,
 		"HOST_CODEX_BIN":       codexBin,
-	})
+	}
+
+	if value := joinCSV(s.runtime.Config.DependencyProfiles); value != "" {
+		extra["ALCATRAZ_DEP_PROFILES"] = value
+	}
+	if value := joinCSV(s.runtime.Config.AptPackages); value != "" {
+		extra["ALCATRAZ_APT_PACKAGES"] = value
+	}
+	if value := joinCSV(s.runtime.Config.NodePackages); value != "" {
+		extra["ALCATRAZ_NODE_PACKAGES"] = value
+	}
+	if value := joinCSV(s.runtime.Config.PythonPackages); value != "" {
+		extra["ALCATRAZ_PYTHON_PACKAGES"] = value
+	}
+	if value := joinCSV(s.runtime.Config.GoModules); value != "" {
+		extra["ALCATRAZ_GO_MODULES"] = value
+	}
+
+	return s.runtime.CommandEnv(extra)
+}
+
+func joinCSV(values []string) string {
+	seen := make(map[string]struct{}, len(values))
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		parts = append(parts, value)
+	}
+	return strings.Join(parts, ",")
 }
 
 func (s *Service) writeRunMetadata(meta RunMetadata) error {

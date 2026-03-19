@@ -17,6 +17,11 @@ type Config struct {
 	ComposeFiles         []string `json:"compose_files"`
 	ChatGPTComposeFile   string   `json:"chatgpt_compose_file"`
 	AgentCommand         []string `json:"agent_command"`
+	DependencyProfiles   []string `json:"dependency_profiles"`
+	AptPackages          []string `json:"apt_packages"`
+	NodePackages         []string `json:"node_packages"`
+	PythonPackages       []string `json:"python_packages"`
+	GoModules            []string `json:"go_modules"`
 }
 
 func Default() Config {
@@ -29,6 +34,11 @@ func Default() Config {
 		ComposeFiles:         []string{"compose.yaml", "compose.codex.yaml"},
 		ChatGPTComposeFile:   "compose.chatgpt.yaml",
 		AgentCommand:         []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "-C", "/workspace"},
+		DependencyProfiles:   []string{},
+		AptPackages:          []string{},
+		NodePackages:         []string{},
+		PythonPackages:       []string{},
+		GoModules:            []string{},
 	}
 }
 

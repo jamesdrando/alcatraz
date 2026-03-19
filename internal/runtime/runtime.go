@@ -306,6 +306,19 @@ func (r *Runtime) bootstrapEnvFileContents() (string, bool) {
 		hasValues = true
 	}
 
+	for _, key := range []string{
+		"ALCATRAZ_DEP_PROFILES",
+		"ALCATRAZ_APT_PACKAGES",
+		"ALCATRAZ_NODE_PACKAGES",
+		"ALCATRAZ_PYTHON_PACKAGES",
+		"ALCATRAZ_GO_MODULES",
+	} {
+		if value := strings.TrimSpace(r.Env[key]); value != "" {
+			lines = append(lines, key+"="+dotenvValue(value))
+			hasValues = true
+		}
+	}
+
 	if !hasValues {
 		return "", false
 	}

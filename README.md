@@ -81,6 +81,49 @@ If you set `compose_files` or `chatgpt_compose_file`, those values now refer to 
 
 On first `alcatraz run`, if the configured env file is missing, Alcatraz will create it for you with any local values it can already discover, such as `HOST_CODEX_BIN`, `HOST_CODEX_HOME`, and `OPENAI_API_KEY`. It writes the file with `0600` permissions and adds it to `.git/info/exclude` when the env file lives inside the repo, so existing repos stay local-first without needing a committed setup file.
 
+## Dependency Layers
+
+When you know the stack ahead of time, you can ask Alcatraz to bake a lean dependency layer into the agent image instead of having the agent install everything ad hoc.
+
+Supported dependency profiles are:
+
+- `node`
+- `typescript`
+- `bun`
+- `go`
+- `python`
+- `rust`
+- `postgresql`
+- `redis`
+- `aws`
+
+For small project-specific additions, the config also accepts:
+
+- `node_packages` for global Node.js packages such as `hono`, `decimal.js`, or `@aws-sdk/client-s3`
+- `python_packages` for global Python packages
+- `go_modules` for Go module cache prefetching
+- `apt_packages` for any other Debian packages you know you need
+
+That keeps the default image lean while still letting you opt into prebuilt tooling when you already know the shape of the repo.
+
+Example:
+
+```json
+{
+  "dependency_profiles": ["typescript", "python"],
+  "node_packages": ["hono", "decimal.js"],
+  "python_packages": ["fastapi", "sqlmodel", "uv"]
+}
+```
+
+The same thing works from the command line:
+
+```bash
+alcatraz run --deps typescript,python --node-packages hono,decimal.js --python-packages fastapi,sqlmodel,uv
+```
+
+For Go and Rust, the lean default is to bake in the toolchain and let the repo's own manifest control library dependencies. If you already know a Go module you want prefetched, `go_modules` lets you name it explicitly.
+
 ## Runtime Layout
 
 To keep public repos clean while avoiding Git/tooling edge cases, Alcatraz splits runtime data in two places:
