@@ -281,6 +281,9 @@ func TestRunInteractivePassesDependencySettingsToCompose(t *testing.T) {
 	if !hasEnvValue(docker.upEnv, "ALCATRAZ_EGRESS_PROXY", "http://192.168.80.2:3128") {
 		t.Fatalf("missing resolved egress proxy URL in compose env: %+v", docker.upEnv)
 	}
+	if !hasEnvKey(docker.upEnv, "ALCATRAZ_EGRESS_DNS_1") || !hasEnvKey(docker.upEnv, "ALCATRAZ_EGRESS_DNS_2") {
+		t.Fatalf("missing explicit egress DNS configuration in compose env: %+v", docker.upEnv)
+	}
 	if len(docker.upCalls) != 2 {
 		t.Fatalf("expected two compose up calls, got %+v", docker.upCalls)
 	}
@@ -295,6 +298,31 @@ func TestRunInteractivePassesDependencySettingsToCompose(t *testing.T) {
 	}
 	if docker.execInteractiveCalls != 1 {
 		t.Fatalf("expected one interactive exec call, got %d", docker.execInteractiveCalls)
+	}
+}
+
+func TestParseNameserversSkipsEmbeddedDockerDNS(t *testing.T) {
+	resolvConf := strings.Join([]string{
+		"nameserver 127.0.0.11",
+		"nameserver 172.30.32.1",
+		"nameserver 1.1.1.1",
+		"nameserver 172.30.32.1",
+		"",
+	}, "\n")
+
+	got := parseNameservers(resolvConf)
+	want := []string{"172.30.32.1", "1.1.1.1"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("parseNameservers() = %v, want %v", got, want)
+	}
+}
+
+func TestDefaultEgressDNSServersFallsBackAndDuplicatesSingleResolver(t *testing.T) {
+	if got := defaultEgressDNSServers(nil); strings.Join(got, ",") != "1.1.1.1,8.8.8.8" {
+		t.Fatalf("defaultEgressDNSServers(nil) = %v", got)
+	}
+	if got := defaultEgressDNSServers([]string{"172.30.32.1"}); strings.Join(got, ",") != "172.30.32.1,172.30.32.1" {
+		t.Fatalf("defaultEgressDNSServers(single) = %v", got)
 	}
 }
 
@@ -469,6 +497,16 @@ func hasEnvValue(env []string, key, want string) bool {
 	prefix := key + "="
 	for _, entry := range env {
 		if strings.HasPrefix(entry, prefix) && strings.TrimPrefix(entry, prefix) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnvKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
 			return true
 		}
 	}

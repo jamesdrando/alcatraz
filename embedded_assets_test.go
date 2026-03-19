@@ -28,3 +28,15 @@ func TestComposeYamlUsesInjectableProxyURL(t *testing.T) {
 		t.Fatalf("expected injectable proxy env on HTTP/HTTPS/ALL proxy, got %d", got)
 	}
 }
+
+func TestComposeYamlInjectsExplicitProxyDNS(t *testing.T) {
+	data, err := bundledFS.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatalf("read compose.yaml: %v", err)
+	}
+
+	want := []byte("${ALCATRAZ_EGRESS_DNS_")
+	if got := bytes.Count(data, want); got != 2 {
+		t.Fatalf("expected two injectable DNS entries for egress proxy, got %d", got)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -614,6 +615,8 @@ func (s *Service) composeEnv(meta RunMetadata, codexBin string, proxyURL string)
 
 	extra := map[string]string{
 		"ALCATRAZ_CONTAINER_RUNTIME": containerRuntime,
+		"ALCATRAZ_EGRESS_DNS_1":      egressDNSServers()[0],
+		"ALCATRAZ_EGRESS_DNS_2":      egressDNSServers()[1],
 		"ALCATRAZ_EGRESS_PROXY":      proxyURL,
 		"ALCATRAZ_WORKSPACE":         meta.WorktreePath,
 		"COMPOSE_PROJECT_NAME":       meta.ComposeProject,
@@ -700,6 +703,61 @@ func composeProjectName(prefix, runID string) string {
 
 func agentNetworkName(composeProject string) string {
 	return composeProject + "_agent-net"
+}
+
+func egressDNSServers() []string {
+	data, err := os.ReadFile("/etc/resolv.conf")
+	if err != nil {
+		return defaultEgressDNSServers(nil)
+	}
+	return defaultEgressDNSServers(parseNameservers(string(data)))
+}
+
+func defaultEgressDNSServers(nameservers []string) []string {
+	switch len(nameservers) {
+	case 0:
+		return []string{"1.1.1.1", "8.8.8.8"}
+	case 1:
+		return []string{nameservers[0], nameservers[0]}
+	default:
+		return []string{nameservers[0], nameservers[1]}
+	}
+}
+
+func parseNameservers(resolvConf string) []string {
+	lines := strings.Split(resolvConf, "\n")
+	servers := make([]string, 0, len(lines))
+	seen := map[string]struct{}{}
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "nameserver" {
+			continue
+		}
+		server := fields[1]
+		if !usableNameserver(server) {
+			continue
+		}
+		if _, ok := seen[server]; ok {
+			continue
+		}
+		seen[server] = struct{}{}
+		servers = append(servers, server)
+	}
+	return servers
+}
+
+func usableNameserver(server string) bool {
+	addr, err := netip.ParseAddr(server)
+	if err != nil {
+		return false
+	}
+	if addr.IsLoopback() || addr.IsUnspecified() {
+		return false
+	}
+	if server == "127.0.0.10" || server == "127.0.0.11" {
+		return false
+	}
+	return true
 }
 
 func sanitizeComposePart(value string) string {
