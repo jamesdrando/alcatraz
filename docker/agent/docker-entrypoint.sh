@@ -16,4 +16,14 @@ if [ -f "${SEED_DIR}/config.toml" ] && [ ! -f "${CODEX_HOME}/config.toml" ]; the
     chmod 600 "${CODEX_HOME}/config.toml"
 fi
 
+CONFIG_PATH="${CODEX_HOME}/config.toml"
+WORKSPACE_PROJECT='[projects."/workspace"]'
+if [ ! -f "${CONFIG_PATH}" ]; then
+    : > "${CONFIG_PATH}"
+    chmod 600 "${CONFIG_PATH}"
+fi
+if ! grep -Fq "${WORKSPACE_PROJECT}" "${CONFIG_PATH}"; then
+    printf '\n%s\ntrust_level = "trusted"\n' "${WORKSPACE_PROJECT}" >> "${CONFIG_PATH}"
+fi
+
 exec "$@"

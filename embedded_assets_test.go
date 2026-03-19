@@ -52,3 +52,15 @@ func TestComposeYamlInjectsExplicitProxyDNS(t *testing.T) {
 		t.Fatalf("expected two injectable DNS entries for egress proxy, got %d", got)
 	}
 }
+
+func TestAgentEntrypointSeedsWorkspaceTrust(t *testing.T) {
+	data, err := bundledFS.ReadFile("docker/agent/docker-entrypoint.sh")
+	if err != nil {
+		t.Fatalf("read docker-entrypoint.sh: %v", err)
+	}
+
+	want := []byte(`[projects."/workspace"]`)
+	if !bytes.Contains(data, want) {
+		t.Fatalf("expected agent entrypoint to seed workspace trust")
+	}
+}
