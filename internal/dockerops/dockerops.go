@@ -52,6 +52,39 @@ func (c *Client) ExecServiceInteractive(composeFiles, env []string, streams Stre
 	return c.runDocker(args, env, streams)
 }
 
+func (c *Client) ServiceNetworkIP(composeFiles, env []string, service, network string) (string, error) {
+	args := c.composeArgs(composeFiles, "ps", "-q", service)
+	containerID, err := c.runDockerOutput(args, env)
+	if err != nil {
+		return "", err
+	}
+	containerID = strings.TrimSpace(containerID)
+	if containerID == "" {
+		return "", fmt.Errorf("no running container found for compose service: %s", service)
+	}
+
+	cmd := exec.Command("docker", "inspect", "-f", "{{with index .NetworkSettings.Networks \""+network+"\"}}{{.IPAddress}}{{end}}", containerID)
+	cmd.Dir = c.RepoRoot
+	cmd.Env = env
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+		return "", err
+	}
+
+	ip := strings.TrimSpace(stdout.String())
+	if ip == "" {
+		return "", fmt.Errorf("compose service %s has no IP on network %s", service, network)
+	}
+	return ip, nil
+}
+
 func (c *Client) ProjectRunning(project string) (bool, error) {
 	cmd := exec.Command("docker", "ps", "--filter", "label=com.docker.compose.project="+project, "--format", "{{.ID}}")
 	var stdout bytes.Buffer
@@ -109,4 +142,22 @@ func (c *Client) runDocker(args, env []string, streams Streams) error {
 		return err
 	}
 	return nil
+}
+
+func (c *Client) runDockerOutput(args, env []string) (string, error) {
+	cmd := exec.Command("docker", args...)
+	cmd.Dir = c.RepoRoot
+	cmd.Env = env
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() > 0 {
+			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+		return "", err
+	}
+	return stdout.String(), nil
 }

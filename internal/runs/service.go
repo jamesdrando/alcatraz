@@ -100,6 +100,7 @@ type dockerClient interface {
 	RunService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error
 	ExecService(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error
 	ExecServiceInteractive(composeFiles, env []string, streams dockerops.Streams, service string, command []string) error
+	ServiceNetworkIP(composeFiles, env []string, service, network string) (string, error)
 	ProjectRunning(project string) (bool, error)
 }
 
@@ -188,12 +189,21 @@ func (s *Service) Create(opts CreateOptions) (RunMetadata, error) {
 }
 
 func (s *Service) StartPersistent(meta RunMetadata, extraAgentArgs []string) error {
-	env, err := s.runEnv(meta)
+	bootstrapEnv, err := s.runEnv(meta, "")
 	if err != nil {
 		return err
 	}
 
-	if err := s.docker.UpDetached(meta.ComposeFiles, env, dockerops.Streams{}, "egress-proxy", "agent"); err != nil {
+	if err := s.docker.UpDetached(meta.ComposeFiles, bootstrapEnv, dockerops.Streams{}, "egress-proxy"); err != nil {
+		return err
+	}
+
+	env, err := s.runEnvWithResolvedProxy(meta, bootstrapEnv)
+	if err != nil {
+		return err
+	}
+
+	if err := s.docker.UpDetached(meta.ComposeFiles, env, dockerops.Streams{}, "agent"); err != nil {
 		return err
 	}
 
@@ -205,17 +215,25 @@ func (s *Service) StartPersistent(meta RunMetadata, extraAgentArgs []string) err
 }
 
 func (s *Service) RunInteractive(meta RunMetadata, extraAgentArgs []string, streams dockerops.Streams) error {
-	env, err := s.runEnv(meta)
+	bootstrapEnv, err := s.runEnv(meta, "")
 	if err != nil {
 		return err
 	}
 
-	if err := s.docker.UpDetached(meta.ComposeFiles, env, streams, "egress-proxy", "agent"); err != nil {
+	if err := s.docker.UpDetached(meta.ComposeFiles, bootstrapEnv, streams, "egress-proxy"); err != nil {
 		return err
 	}
 	defer func() {
-		_ = s.docker.Down(meta.ComposeFiles, env, streams)
+		_ = s.docker.Down(meta.ComposeFiles, bootstrapEnv, streams)
 	}()
+
+	env, err := s.runEnvWithResolvedProxy(meta, bootstrapEnv)
+	if err != nil {
+		return err
+	}
+	if err := s.docker.UpDetached(meta.ComposeFiles, env, streams, "agent"); err != nil {
+		return err
+	}
 
 	command := append(append([]string{}, s.runtime.Config.AgentCommand...), extraAgentArgs...)
 	return s.docker.ExecServiceInteractive(meta.ComposeFiles, env, streams, "agent", command)
@@ -555,36 +573,48 @@ func (s *Service) cleanLegacyWorktrees(deleteBranch bool) (CleanupSummary, error
 	return CleanupSummary{Runs: results}, nil
 }
 
-func (s *Service) runEnv(meta RunMetadata) ([]string, error) {
+func (s *Service) runEnv(meta RunMetadata, proxyURL string) ([]string, error) {
 	codexBin, err := s.runtime.ResolveCodexBin()
 	if err != nil {
 		return nil, err
 	}
 
-	return s.composeEnv(meta, codexBin)
+	return s.composeEnv(meta, codexBin, proxyURL)
+}
+
+func (s *Service) runEnvWithResolvedProxy(meta RunMetadata, env []string) ([]string, error) {
+	ip, err := s.docker.ServiceNetworkIP(meta.ComposeFiles, env, "egress-proxy", agentNetworkName(meta.ComposeProject))
+	if err != nil {
+		return nil, err
+	}
+	return s.runEnv(meta, "http://"+ip+":3128")
 }
 
 func (s *Service) cleanupEnv(meta RunMetadata) ([]string, error) {
 	if codexBin := strings.TrimSpace(s.runtime.Env["HOST_CODEX_BIN"]); codexBin != "" {
-		return s.composeEnv(meta, codexBin)
+		return s.composeEnv(meta, codexBin, "")
 	}
 	if _, err := os.Stat("/bin/sh"); err == nil {
-		return s.composeEnv(meta, "/bin/sh")
+		return s.composeEnv(meta, "/bin/sh", "")
 	}
 	if executable, err := os.Executable(); err == nil {
-		return s.composeEnv(meta, executable)
+		return s.composeEnv(meta, executable, "")
 	}
 	return nil, errors.New("could not resolve HOST_CODEX_BIN for cleanup")
 }
 
-func (s *Service) composeEnv(meta RunMetadata, codexBin string) ([]string, error) {
+func (s *Service) composeEnv(meta RunMetadata, codexBin string, proxyURL string) ([]string, error) {
 	containerRuntime, err := s.runtime.ResolveContainerRuntime()
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(proxyURL) == "" {
+		proxyURL = "http://egress-proxy:3128"
+	}
 
 	extra := map[string]string{
 		"ALCATRAZ_CONTAINER_RUNTIME": containerRuntime,
+		"ALCATRAZ_EGRESS_PROXY":      proxyURL,
 		"ALCATRAZ_WORKSPACE":         meta.WorktreePath,
 		"COMPOSE_PROJECT_NAME":       meta.ComposeProject,
 		"HOST_CODEX_BIN":             codexBin,
@@ -666,6 +696,10 @@ func summarizeStatus(status RunStatus) string {
 func composeProjectName(prefix, runID string) string {
 	name := sanitizeComposePart(prefix) + "-" + sanitizeComposePart(runID)
 	return strings.Trim(name, "-")
+}
+
+func agentNetworkName(composeProject string) string {
+	return composeProject + "_agent-net"
 }
 
 func sanitizeComposePart(value string) string {

@@ -19,14 +19,17 @@ type fakeDocker struct {
 	upEnv                []string
 	runEnv               []string
 	upServices           []string
+	upCalls              [][]string
 	runCalls             int
 	execCalls            int
 	execInteractiveCalls int
+	serviceNetworkIP     string
 }
 
 func (f *fakeDocker) UpDetached(composeFiles, env []string, streams dockerops.Streams, services ...string) error {
 	f.upEnv = append([]string{}, env...)
 	f.upServices = append([]string{}, services...)
+	f.upCalls = append(f.upCalls, append([]string{}, services...))
 	return nil
 }
 
@@ -51,6 +54,13 @@ func (f *fakeDocker) ExecServiceInteractive(composeFiles, env []string, streams 
 	f.execInteractiveCalls++
 	f.runEnv = append([]string{}, env...)
 	return nil
+}
+
+func (f *fakeDocker) ServiceNetworkIP(composeFiles, env []string, service, network string) (string, error) {
+	if f.serviceNetworkIP == "" {
+		return "192.168.80.2", nil
+	}
+	return f.serviceNetworkIP, nil
 }
 
 func (f *fakeDocker) ProjectRunning(project string) (bool, error) {
@@ -268,8 +278,17 @@ func TestRunInteractivePassesDependencySettingsToCompose(t *testing.T) {
 	if !hasEnvValue(docker.upEnv, "ALCATRAZ_CONTAINER_RUNTIME", "runc") {
 		t.Fatalf("missing container runtime in compose env: %+v", docker.upEnv)
 	}
-	if len(docker.upServices) != 2 || docker.upServices[0] != "egress-proxy" || docker.upServices[1] != "agent" {
-		t.Fatalf("expected interactive run to start egress-proxy and agent services, got %+v", docker.upServices)
+	if !hasEnvValue(docker.upEnv, "ALCATRAZ_EGRESS_PROXY", "http://192.168.80.2:3128") {
+		t.Fatalf("missing resolved egress proxy URL in compose env: %+v", docker.upEnv)
+	}
+	if len(docker.upCalls) != 2 {
+		t.Fatalf("expected two compose up calls, got %+v", docker.upCalls)
+	}
+	if len(docker.upCalls[0]) != 1 || docker.upCalls[0][0] != "egress-proxy" {
+		t.Fatalf("expected first compose up to start only egress-proxy, got %+v", docker.upCalls[0])
+	}
+	if len(docker.upCalls[1]) != 1 || docker.upCalls[1][0] != "agent" {
+		t.Fatalf("expected second compose up to start only agent, got %+v", docker.upCalls[1])
 	}
 	if docker.runCalls != 0 {
 		t.Fatalf("expected interactive run not to use compose run, got %d calls", docker.runCalls)
