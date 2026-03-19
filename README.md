@@ -28,7 +28,7 @@ go install github.com/jamesdrando/alcatraz/cmd/alcatraz@latest
 go install github.com/jamesdrando/alcatraz/cmd/alcatraz-mcp@latest
 ```
 
-The installed binaries are self-contained for Docker/Compose assets, and `alcatraz run` can be launched from another git repo without copying `compose.yaml`, Dockerfiles, or entrypoint scripts into that target repo. The bundled Compose file defaults to `runsc`, and you can override it with `ALCATRAZ_CONTAINER_RUNTIME` if your Docker daemon is registered differently.
+The installed binaries are self-contained for Docker/Compose assets, and `alcatraz run` can be launched from another git repo without copying `compose.yaml`, Dockerfiles, or entrypoint scripts into that target repo. Alcatraz prefers `runsc` when your Docker daemon has it registered, falls back to Docker's default runtime otherwise, and still lets you override the choice with `ALCATRAZ_CONTAINER_RUNTIME`.
 
 ## Commands
 
@@ -59,7 +59,7 @@ alcatraz clean --all --delete-branch
 
 `alcatraz run` works without a config file and uses built-in defaults.
 
-Config discovery still happens in the target repo. The installed binary stages its bundled Docker/Compose assets under `.git/alcatraz/assets/` and uses those staged files at runtime. The runtime boundary is still host-managed through Docker Compose, but the services default to gVisor's `runsc` runtime.
+Config discovery still happens in the target repo. The installed binary stages its bundled Docker/Compose assets under `.git/alcatraz/assets/` and uses those staged files at runtime. The runtime boundary is still host-managed through Docker Compose, and Alcatraz will use gVisor's `runsc` runtime when Docker exposes it.
 
 If a repo wants explicit config, the CLI looks for these files in order:
 

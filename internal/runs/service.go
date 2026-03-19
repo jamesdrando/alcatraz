@@ -560,27 +560,33 @@ func (s *Service) runEnv(meta RunMetadata) ([]string, error) {
 		return nil, err
 	}
 
-	return s.composeEnv(meta, codexBin), nil
+	return s.composeEnv(meta, codexBin)
 }
 
 func (s *Service) cleanupEnv(meta RunMetadata) ([]string, error) {
 	if codexBin := strings.TrimSpace(s.runtime.Env["HOST_CODEX_BIN"]); codexBin != "" {
-		return s.composeEnv(meta, codexBin), nil
+		return s.composeEnv(meta, codexBin)
 	}
 	if _, err := os.Stat("/bin/sh"); err == nil {
-		return s.composeEnv(meta, "/bin/sh"), nil
+		return s.composeEnv(meta, "/bin/sh")
 	}
 	if executable, err := os.Executable(); err == nil {
-		return s.composeEnv(meta, executable), nil
+		return s.composeEnv(meta, executable)
 	}
 	return nil, errors.New("could not resolve HOST_CODEX_BIN for cleanup")
 }
 
-func (s *Service) composeEnv(meta RunMetadata, codexBin string) []string {
+func (s *Service) composeEnv(meta RunMetadata, codexBin string) ([]string, error) {
+	containerRuntime, err := s.runtime.ResolveContainerRuntime()
+	if err != nil {
+		return nil, err
+	}
+
 	extra := map[string]string{
-		"ALCATRAZ_WORKSPACE":   meta.WorktreePath,
-		"COMPOSE_PROJECT_NAME": meta.ComposeProject,
-		"HOST_CODEX_BIN":       codexBin,
+		"ALCATRAZ_CONTAINER_RUNTIME": containerRuntime,
+		"ALCATRAZ_WORKSPACE":         meta.WorktreePath,
+		"COMPOSE_PROJECT_NAME":       meta.ComposeProject,
+		"HOST_CODEX_BIN":             codexBin,
 	}
 
 	if value := joinCSV(s.runtime.Config.DependencyProfiles); value != "" {
@@ -599,7 +605,7 @@ func (s *Service) composeEnv(meta RunMetadata, codexBin string) []string {
 		extra["ALCATRAZ_GO_MODULES"] = value
 	}
 
-	return s.runtime.CommandEnv(extra)
+	return s.runtime.CommandEnv(extra), nil
 }
 
 func joinCSV(values []string) string {

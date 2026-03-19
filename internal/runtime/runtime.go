@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	assets "github.com/jamesdrando/alcatraz"
 	"github.com/jamesdrando/alcatraz/internal/config"
@@ -32,16 +33,19 @@ type OpenOptions struct {
 }
 
 type Runtime struct {
-	RepoRoot           string
-	GitDir             string
-	StateDir           string
-	AssetsRoot         string
-	Config             config.Config
-	Env                map[string]string
-	Git                *gitops.Client
-	Docker             *dockerops.Client
-	composeFiles       []string
-	chatGPTComposeFile string
+	RepoRoot             string
+	GitDir               string
+	StateDir             string
+	AssetsRoot           string
+	Config               config.Config
+	Env                  map[string]string
+	Git                  *gitops.Client
+	Docker               *dockerops.Client
+	composeFiles         []string
+	chatGPTComposeFile   string
+	containerRuntime     string
+	containerRuntimeErr  error
+	containerRuntimeOnce sync.Once
 }
 
 func Open(opts OpenOptions) (*Runtime, error) {
@@ -228,6 +232,23 @@ func (r *Runtime) CommandEnv(extra map[string]string) []string {
 	return out
 }
 
+func (r *Runtime) ResolveContainerRuntime() (string, error) {
+	if value := strings.TrimSpace(r.Env["ALCATRAZ_CONTAINER_RUNTIME"]); value != "" {
+		return value, nil
+	}
+
+	r.containerRuntimeOnce.Do(func() {
+		r.containerRuntime, r.containerRuntimeErr = detectContainerRuntime()
+	})
+	if r.containerRuntimeErr != nil {
+		return "", r.containerRuntimeErr
+	}
+	if r.containerRuntime == "" {
+		return "", errors.New("could not resolve a usable Docker runtime; set ALCATRAZ_CONTAINER_RUNTIME explicitly")
+	}
+	return r.containerRuntime, nil
+}
+
 func (r *Runtime) ResolveCodexBin() (string, error) {
 	if path := r.Env["HOST_CODEX_BIN"]; path != "" {
 		info, err := os.Stat(path)
@@ -358,6 +379,58 @@ func environmentMap(entries []string) map[string]string {
 		env[parts[0]] = parts[1]
 	}
 	return env
+}
+
+func detectContainerRuntime() (string, error) {
+	const dockerInfoFormat = "{{range $name, $_ := .Runtimes}}{{$name}}{{println}}{{end}}DEFAULT={{.DefaultRuntime}}"
+
+	output, err := exec.Command("docker", "info", "--format", dockerInfoFormat).CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message != "" {
+			return "", fmt.Errorf("inspect docker runtimes: %w: %s", err, message)
+		}
+		return "", fmt.Errorf("inspect docker runtimes: %w", err)
+	}
+
+	runtimes := map[string]struct{}{}
+	defaultRuntime := ""
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "DEFAULT=") {
+			defaultRuntime = strings.TrimSpace(strings.TrimPrefix(line, "DEFAULT="))
+			continue
+		}
+		runtimes[line] = struct{}{}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read docker runtime probe: %w", err)
+	}
+
+	if _, ok := runtimes["runsc"]; ok {
+		return "runsc", nil
+	}
+	if defaultRuntime != "" {
+		return defaultRuntime, nil
+	}
+	if _, ok := runtimes["runc"]; ok {
+		return "runc", nil
+	}
+
+	if len(runtimes) == 0 {
+		return "", errors.New("docker did not report any registered container runtimes")
+	}
+
+	names := make([]string, 0, len(runtimes))
+	for name := range runtimes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return "", fmt.Errorf("docker did not report a default runtime; available runtimes: %s", strings.Join(names, ", "))
 }
 
 func parseDotEnv(path string) (map[string]string, error) {

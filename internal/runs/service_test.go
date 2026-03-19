@@ -252,6 +252,9 @@ func TestRunInteractivePassesDependencySettingsToCompose(t *testing.T) {
 	if !hasEnvValue(docker.upEnv, "ALCATRAZ_GO_MODULES", "github.com/jackc/pgx/v5@v5.7.1") {
 		t.Fatalf("missing go modules in compose env: %+v", docker.upEnv)
 	}
+	if !hasEnvValue(docker.upEnv, "ALCATRAZ_CONTAINER_RUNTIME", "runc") {
+		t.Fatalf("missing container runtime in compose env: %+v", docker.upEnv)
+	}
 }
 
 func TestFinishCommitsMergesAndCleans(t *testing.T) {
@@ -362,6 +365,7 @@ func TestCreateRejectsUnknownBundledComposeAsset(t *testing.T) {
 	_, err := rtpkg.Open(rtpkg.OpenOptions{
 		RepoRoot: repoRoot,
 		Environ: []string{
+			"ALCATRAZ_CONTAINER_RUNTIME=runc",
 			"OPENAI_API_KEY=test-key",
 			"HOST_CODEX_BIN=/bin/sh",
 			"HOME=" + repoRoot,
@@ -381,6 +385,7 @@ func newTestRuntime(t *testing.T, repoRoot string) *rtpkg.Runtime {
 	runtime, err := rtpkg.Open(rtpkg.OpenOptions{
 		RepoRoot: repoRoot,
 		Environ: []string{
+			"ALCATRAZ_CONTAINER_RUNTIME=runc",
 			"OPENAI_API_KEY=test-key",
 			"HOST_CODEX_BIN=/bin/sh",
 			"HOME=" + repoRoot,
