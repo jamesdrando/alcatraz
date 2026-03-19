@@ -1,6 +1,6 @@
 # alcatraz
 
-`alcatraz` is a Go CLI for running coding agents inside a hardened Docker boundary.
+`alcatraz` is a Go CLI for running coding agents inside a hardened gVisor-backed Docker boundary.
 
 It is intentionally scoped to the containerization layer:
 
@@ -28,7 +28,7 @@ go install github.com/jamesdrando/alcatraz/cmd/alcatraz@latest
 go install github.com/jamesdrando/alcatraz/cmd/alcatraz-mcp@latest
 ```
 
-The installed binaries are self-contained for Docker/Compose assets. `alcatraz run` can be launched from another git repo without copying `compose.yaml`, Dockerfiles, or entrypoint scripts into that target repo.
+The installed binaries are self-contained for Docker/Compose assets, and `alcatraz run` can be launched from another git repo without copying `compose.yaml`, Dockerfiles, or entrypoint scripts into that target repo. The bundled Compose file defaults to `runsc`, and you can override it with `ALCATRAZ_CONTAINER_RUNTIME` if your Docker daemon is registered differently.
 
 ## Commands
 
@@ -59,7 +59,7 @@ alcatraz clean --all --delete-branch
 
 `alcatraz run` works without a config file and uses built-in defaults.
 
-Config discovery still happens in the target repo. The installed binary stages its bundled Docker/Compose assets under `.git/alcatraz/assets/` and uses those staged files at runtime.
+Config discovery still happens in the target repo. The installed binary stages its bundled Docker/Compose assets under `.git/alcatraz/assets/` and uses those staged files at runtime. The runtime boundary is still host-managed through Docker Compose, but the services default to gVisor's `runsc` runtime.
 
 If a repo wants explicit config, the CLI looks for these files in order:
 
@@ -180,7 +180,7 @@ The container runtime keeps the important restrictions:
 
 The `egress-proxy` is the only container with outbound access, and it only permits domains from `SQUID_ALLOWED_DOMAINS`.
 
-Inside the container, the agent itself is launched with internal sandbox bypass enabled on purpose. The Docker boundary is the sandbox.
+Inside the container, the agent itself is launched with internal sandbox bypass enabled on purpose. The gVisor boundary is the sandbox.
 
 ## Default Allowlist
 
