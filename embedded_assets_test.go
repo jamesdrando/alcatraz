@@ -53,6 +53,17 @@ func TestComposeYamlInjectsExplicitProxyDNS(t *testing.T) {
 	}
 }
 
+func TestComposeYamlUsesRootChatGPTDomainOnce(t *testing.T) {
+	data, err := bundledFS.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatalf("read compose.yaml: %v", err)
+	}
+
+	if bytes.Contains(data, []byte(".chatgpt.com")) {
+		t.Fatal("expected bundled compose config not to include redundant .chatgpt.com allowlist entry")
+	}
+}
+
 func TestAgentEntrypointSeedsWorkspaceTrust(t *testing.T) {
 	data, err := bundledFS.ReadFile("docker/agent/docker-entrypoint.sh")
 	if err != nil {

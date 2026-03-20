@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -96,6 +97,9 @@ func (c *Client) ServiceNetworkIP(composeFiles, env []string, service, network s
 	ip := strings.TrimSpace(stdout.String())
 	if ip == "" {
 		return "", fmt.Errorf("compose service %s has no IP on network %s", service, network)
+	}
+	if parsed := net.ParseIP(ip); parsed == nil {
+		return "", fmt.Errorf("compose service %s reported an unusable IP on network %s: %q", service, network, ip)
 	}
 	return ip, nil
 }
