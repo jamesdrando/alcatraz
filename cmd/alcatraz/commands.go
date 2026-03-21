@@ -6,11 +6,27 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/jamesdrando/alcatraz/internal/runs"
 	rtpkg "github.com/jamesdrando/alcatraz/internal/runtime"
 )
+
+type stringListFlag []string
+
+func (f *stringListFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *stringListFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	*f = append(*f, value)
+	return nil
+}
 
 func handleList(args []string) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
@@ -165,8 +181,16 @@ func handleFinish(args []string) error {
 	runID := fs.String("run", "", "Run ID")
 	message := fs.String("message", "", "Commit message for changes in the run worktree")
 	fs.StringVar(message, "m", "", "Commit message for changes in the run worktree")
-	merge := fs.Bool("merge", false, "Merge the run branch into the current branch")
-	into := fs.String("into", "", "Branch to merge into; defaults to the current branch")
+	status := fs.String("status", "", "Structured completion status: ready, blocked, or ready_with_assumptions")
+	summary := fs.String("summary", "", "Short completion summary")
+	var assumptions stringListFlag
+	var followups stringListFlag
+	var needsChanges stringListFlag
+	fs.Var(&assumptions, "assumption", "Record an assumption for this run; repeat to add more")
+	fs.Var(&followups, "followup", "Record a suggested follow-up item; repeat to add more")
+	fs.Var(&needsChanges, "needs-change", "Record a cross-scope change as path:description or description; repeat to add more")
+	merge := fs.Bool("merge", false, "Merge the run branch into its recorded merge target")
+	into := fs.String("into", "", "Branch to merge into; defaults to the run's recorded merge target")
 	clean := fs.Bool("clean", false, "Remove the run worktree after finishing")
 	deleteBranch := fs.Bool("delete-branch", false, "Delete the run branch after finishing")
 	asJSON := fs.Bool("json", false, "Print JSON")
@@ -183,9 +207,19 @@ func handleFinish(args []string) error {
 	}
 	service := runs.New(runtime)
 
+	parsedNeedsChanges, err := parseNeedsChanges(needsChanges)
+	if err != nil {
+		return err
+	}
+
 	result, err := service.Finish(runs.FinishOptions{
 		RunID:         *runID,
 		CommitMessage: *message,
+		Status:        runs.RunCompletionStatus(strings.TrimSpace(*status)),
+		Summary:       *summary,
+		NeedsChanges:  parsedNeedsChanges,
+		Assumptions:   []string(assumptions),
+		Followups:     []string(followups),
 		Merge:         *merge,
 		MergeInto:     *into,
 		Clean:         *clean,
@@ -249,6 +283,11 @@ func printFinishResult(result runs.FinishResult, out io.Writer) error {
 			return err
 		}
 	}
+	if result.CompletionSaved {
+		if _, err := fmt.Fprintf(out, "Recorded structured completion state for %s\n", result.RunID); err != nil {
+			return err
+		}
+	}
 	if result.WorktreeRemoved {
 		if _, err := fmt.Fprintf(out, "Removed worktree for %s\n", result.RunID); err != nil {
 			return err
@@ -260,4 +299,27 @@ func printFinishResult(result runs.FinishResult, out io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func parseNeedsChanges(values []string) ([]runs.ChangeRequest, error) {
+	items := make([]runs.ChangeRequest, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+
+		item := runs.ChangeRequest{}
+		if idx := strings.Index(value, ":"); idx >= 0 {
+			item.Path = strings.TrimSpace(value[:idx])
+			item.Description = strings.TrimSpace(value[idx+1:])
+		} else {
+			item.Description = value
+		}
+		if item.Description == "" {
+			return nil, fmt.Errorf("invalid --needs-change value %q: description is required", value)
+		}
+		items = append(items, item)
+	}
+	return items, nil
 }

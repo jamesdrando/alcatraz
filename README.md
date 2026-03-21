@@ -170,7 +170,7 @@ The MCP layer stays thin:
 - it reuses `.env` and the same auth resolution rules
 - it does not require an existing Alcatraz container to already be running
 
-`alcatraz_run` creates the git worktree, branch, metadata, compose project, and detached container set for a run. It starts `egress-proxy` and `agent` on the host. If `extra_agent_args` are provided, it also executes the configured agent command inside the fresh `agent` container after startup.
+`alcatraz_run` creates the git worktree, branch, metadata, compose project, and detached container set for a run. It records an explicit `merge_target`, resolves the exact `base_commit` up front, and can optionally constrain the run to `owned_paths` for multi-agent coordination. Path claims support `exclusive` and `shared` modes, and `coordination_paths` let a run reserve cross-cutting files such as `go.mod`, lockfiles, or schemas as explicit global resources. It starts `egress-proxy` and `agent` on the host. If `extra_agent_args` are provided, it also executes the configured agent command inside the fresh `agent` container after startup.
 
 ## MCP Tool Contract
 
@@ -178,8 +178,13 @@ All tool responses return concise structured payloads plus a text JSON mirror fo
 
 `alcatraz_run`
 
-- input: `config_path?`, `base_ref?`, `branch_name?`, `allow_dirty?`, `extra_agent_args?`
-- result: `run_id`, `branch_name`, `worktree_path`, `compose_project`, `auth_mode`
+- input: `config_path?`, `base_ref?`, `branch_name?`, `merge_target?`, `claim_mode?`, `owned_paths?`, `coordination_paths?`, `allow_dirty?`, `extra_agent_args?`
+- result: `run_id`, `branch_name`, `base_commit`, `merge_target`, `claim_mode`, `owned_paths`, `coordination_paths`, `worktree_path`, `compose_project`, `auth_mode`
+
+`alcatraz_diff_run`
+
+- input: `run_id`, `stat?`
+- result: `{ "diff": "..." }`
 
 `alcatraz_list_runs`
 
@@ -205,10 +210,16 @@ All tool responses return concise structured payloads plus a text JSON mirror fo
 - input: `config_path?`
 - result: effective config JSON
 
+`alcatraz_finish_run`
+
+- input: `run_id`, `commit_message?`, `status?`, `summary?`, `needs_changes?`, `assumptions?`, `suggested_followups?`, `merge?`, `merge_into?`, `clean?`, `delete_branch?`
+- result: `commit_created`, `commit_sha`, `touched_paths`, `completion_saved`, `merged`, `merge_target`
+
 `RunStatus` includes:
 
-- `id`, `branch_name`, `base_ref`, `worktree_path`, `compose_project`, `auth_mode`
+- `id`, `branch_name`, `base_ref`, `base_commit`, `merge_target`, `claim_mode`, `owned_paths`, `coordination_paths`, `worktree_path`, `compose_project`, `auth_mode`
 - `status`, `running`, `worktree_exists`, `branch_exists`, `dirty`
+- optional `completion` with `status`, `summary`, `needs_changes`, `assumptions`, `suggested_followups`, `touched_paths`, `commit_sha`, `submitted_at`
 
 ## Security Model
 
@@ -249,9 +260,14 @@ That covers ChatGPT-authenticated Codex/OpenAI traffic plus common package insta
 ## Notes
 
 - The CLI mounts a fresh git worktree into `/workspace` and creates a new branch automatically unless you provide one.
+- Each run records its `merge_target` when it is created, so later integration does not depend on whichever branch happens to be checked out in the main repo at finish time.
+- For multi-agent workflows, prefer setting `owned_paths` per run and having workers report `blocked` or `ready_with_assumptions` instead of editing outside their scope.
+- `claim_mode=exclusive` means overlapping path claims are rejected. `claim_mode=shared` allows overlap only with other shared claims, and only when `owned_paths` is explicit.
+- `coordination_paths` are always reserved exclusively. Use them for shared chokepoints like `go.mod`, lockfiles, schema files, or generated-code roots.
+- New runs reject overlapping active or unresolved claims. A run marked `ready` no longer blocks a later claim on the same scope.
 - `alcatraz list` and `alcatraz status` are intended to be easy for humans and orchestration layers to consume.
 - `alcatraz diff <run-id>` lets you inspect a run without navigating into the worktree yourself.
-- `alcatraz finish <run-id>` stages and commits run changes for you, and can also merge into your current branch and clean up the run.
+- `alcatraz finish <run-id>` stages and commits run changes for you, can record structured completion state, and can also merge into the run's recorded merge target and clean up the run.
 - If `finish` reports `No new worktree changes to commit`, that only means it did not create an extra commit from the worktree. With `--merge`, `--clean`, or `--delete-branch`, it still continues with those requested actions.
 - `alcatraz clean` removes worktrees and can optionally delete the run branches too.
 - If you need to inspect arbitrary external websites from inside the container, those domains must still be allowed explicitly.

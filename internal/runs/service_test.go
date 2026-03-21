@@ -108,6 +108,12 @@ func TestCreateListAndCleanRun(t *testing.T) {
 	if meta.BranchName != "alcatraz/20260318-000000-abcd" {
 		t.Fatalf("unexpected branch name: %s", meta.BranchName)
 	}
+	if meta.MergeTarget != currentBranch(t, repoRoot) {
+		t.Fatalf("unexpected merge target: %s", meta.MergeTarget)
+	}
+	if meta.BaseCommit == "" {
+		t.Fatal("expected base commit to be recorded")
+	}
 	if _, err := os.Stat(runtime.MetadataPath(meta.ID)); err != nil {
 		t.Fatalf("metadata file missing: %v", err)
 	}
@@ -538,6 +544,302 @@ func TestFinishMergesAndCleansWhenRunWorktreeIsAlreadyCommitted(t *testing.T) {
 	}
 }
 
+func TestFinishUsesRecordedMergeTargetByDefault(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+	service.newRunID = func() string { return "20260318-000006-feed" }
+
+	expectedTarget := currentBranch(t, repoRoot)
+
+	meta, err := service.Create(CreateOptions{})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	filePath := filepath.Join(meta.WorktreePath, "targeted.txt")
+	if err := os.WriteFile(filePath, []byte("targeted\n"), 0o644); err != nil {
+		t.Fatalf("write worktree file: %v", err)
+	}
+
+	runCmd(t, repoRoot, "git", "switch", "-c", "scratch/integration-check")
+
+	result, err := service.Finish(FinishOptions{
+		RunID: meta.ID,
+		Merge: true,
+	})
+	if err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+
+	if result.MergeTarget != expectedTarget {
+		t.Fatalf("Finish() merge target = %q, want %q", result.MergeTarget, expectedTarget)
+	}
+	if current := currentBranch(t, repoRoot); current != expectedTarget {
+		t.Fatalf("current branch after finish = %q, want %q", current, expectedTarget)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "targeted.txt")); err != nil {
+		t.Fatalf("merged file missing from merge target: %v", err)
+	}
+}
+
+func TestFinishRejectsChangesOutsideOwnedPaths(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+	service.newRunID = func() string { return "20260318-000007-c0de" }
+
+	meta, err := service.Create(CreateOptions{OwnedPaths: []string{"internal/mcp"}})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	filePath := filepath.Join(meta.WorktreePath, "README.md")
+	if err := os.WriteFile(filePath, []byte("out of scope\n"), 0o644); err != nil {
+		t.Fatalf("write worktree file: %v", err)
+	}
+
+	_, err = service.Finish(FinishOptions{
+		RunID:   meta.ID,
+		Status:  RunCompletionStatusBlocked,
+		Summary: "needs wider change",
+	})
+	if err == nil {
+		t.Fatal("expected ownership error")
+	}
+	if !strings.Contains(err.Error(), "outside its claimed scope") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFinishRecordsStructuredCompletionState(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+	service.newRunID = func() string { return "20260318-000008-face" }
+
+	meta, err := service.Create(CreateOptions{OwnedPaths: []string{"pkg"}})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(meta.WorktreePath, "pkg"), 0o755); err != nil {
+		t.Fatalf("mkdir owned path: %v", err)
+	}
+	filePath := filepath.Join(meta.WorktreePath, "pkg", "worker.txt")
+	if err := os.WriteFile(filePath, []byte("worker\n"), 0o644); err != nil {
+		t.Fatalf("write worktree file: %v", err)
+	}
+
+	result, err := service.Finish(FinishOptions{
+		RunID:   meta.ID,
+		Status:  RunCompletionStatusReadyWithAssumptions,
+		Summary: "implemented owned slice",
+		NeedsChanges: []ChangeRequest{
+			{Path: "internal/orchestrator", Description: "wire the new completion status into scheduling", Blocking: true},
+		},
+		Assumptions: []string{"the orchestrator will honor owned_paths"},
+		Followups:   []string{"add integration test coverage"},
+	})
+	if err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+
+	if !result.CompletionSaved {
+		t.Fatal("expected structured completion state to be saved")
+	}
+	if result.CommitSHA == "" {
+		t.Fatal("expected commit SHA to be recorded")
+	}
+	if len(result.TouchedPaths) != 1 || result.TouchedPaths[0] != "pkg/worker.txt" {
+		t.Fatalf("unexpected touched paths: %+v", result.TouchedPaths)
+	}
+
+	status, err := service.GetStatus(meta.ID)
+	if err != nil {
+		t.Fatalf("GetStatus() error = %v", err)
+	}
+	if status.Completion == nil {
+		t.Fatal("expected completion metadata")
+	}
+	if status.Completion.Status != RunCompletionStatusReadyWithAssumptions {
+		t.Fatalf("unexpected completion status: %+v", status.Completion)
+	}
+	if status.Completion.CommitSHA != result.CommitSHA {
+		t.Fatalf("completion commit SHA = %q, want %q", status.Completion.CommitSHA, result.CommitSHA)
+	}
+	if len(status.Completion.NeedsChanges) != 1 || status.Completion.NeedsChanges[0].Path != "internal/orchestrator" {
+		t.Fatalf("unexpected needs changes: %+v", status.Completion.NeedsChanges)
+	}
+}
+
+func TestCreateRejectsOverlappingOwnedPathsForActiveRuns(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+
+	service.newRunID = func() string { return "20260318-000009-aaaa" }
+	first, err := service.Create(CreateOptions{OwnedPaths: []string{"internal/mcp"}})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if first.ID == "" {
+		t.Fatal("expected first run to have an ID")
+	}
+
+	service.newRunID = func() string { return "20260318-000010-bbbb" }
+	if _, err := service.Create(CreateOptions{OwnedPaths: []string{"internal/mcp/server.go"}}); err == nil {
+		t.Fatal("expected overlapping scope error")
+	} else if !strings.Contains(err.Error(), "overlaps with active run") {
+		t.Fatalf("unexpected overlap error: %v", err)
+	}
+
+	if _, err := service.Create(CreateOptions{OwnedPaths: []string{"internal/runs"}}); err != nil {
+		t.Fatalf("expected disjoint scope to succeed, got %v", err)
+	}
+}
+
+func TestCreateAllowsOverlapAfterRunIsMarkedReady(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+
+	service.newRunID = func() string { return "20260318-000011-cccc" }
+	meta, err := service.Create(CreateOptions{OwnedPaths: []string{"pkg"}})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(meta.WorktreePath, "pkg"), 0o755); err != nil {
+		t.Fatalf("mkdir owned path: %v", err)
+	}
+	filePath := filepath.Join(meta.WorktreePath, "pkg", "done.txt")
+	if err := os.WriteFile(filePath, []byte("done\n"), 0o644); err != nil {
+		t.Fatalf("write worktree file: %v", err)
+	}
+
+	if _, err := service.Finish(FinishOptions{
+		RunID:  meta.ID,
+		Status: RunCompletionStatusReady,
+	}); err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+
+	service.newRunID = func() string { return "20260318-000012-dddd" }
+	if _, err := service.Create(CreateOptions{OwnedPaths: []string{"pkg"}}); err != nil {
+		t.Fatalf("expected ready run not to block new claim, got %v", err)
+	}
+}
+
+func TestCreateAllowsSharedScopeOverlapButRejectsExclusiveOverlap(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+
+	service.newRunID = func() string { return "20260318-000013-eeee" }
+	if _, err := service.Create(CreateOptions{
+		ClaimMode:  RunClaimModeShared,
+		OwnedPaths: []string{"internal/mcp"},
+	}); err != nil {
+		t.Fatalf("Create(shared) error = %v", err)
+	}
+
+	service.newRunID = func() string { return "20260318-000014-ffff" }
+	if _, err := service.Create(CreateOptions{
+		ClaimMode:  RunClaimModeShared,
+		OwnedPaths: []string{"internal/mcp/server.go"},
+	}); err != nil {
+		t.Fatalf("expected shared overlap to succeed, got %v", err)
+	}
+
+	service.newRunID = func() string { return "20260318-000015-1111" }
+	if _, err := service.Create(CreateOptions{
+		ClaimMode:  RunClaimModeExclusive,
+		OwnedPaths: []string{"internal/mcp"},
+	}); err == nil {
+		t.Fatal("expected exclusive overlap error")
+	} else if !strings.Contains(err.Error(), "overlaps with active run") {
+		t.Fatalf("unexpected overlap error: %v", err)
+	}
+}
+
+func TestCreateRejectsSharedWholeRepoClaim(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	service := NewForTesting(runtime, gitops.New(repoRoot), &fakeDocker{runningProjects: map[string]bool{}})
+
+	if _, err := service.Create(CreateOptions{ClaimMode: RunClaimModeShared}); err == nil {
+		t.Fatal("expected shared whole-repo claim to be rejected")
+	} else if !strings.Contains(err.Error(), "shared claim mode requires owned_paths") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCreateRejectsCoordinationPathOverlap(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+
+	service.newRunID = func() string { return "20260318-000016-2222" }
+	if _, err := service.Create(CreateOptions{
+		OwnedPaths:        []string{"pkg/a"},
+		CoordinationPaths: []string{"go.mod"},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	service.newRunID = func() string { return "20260318-000017-3333" }
+	if _, err := service.Create(CreateOptions{
+		OwnedPaths:        []string{"pkg/b"},
+		CoordinationPaths: []string{"go.mod"},
+	}); err == nil {
+		t.Fatal("expected coordination path overlap error")
+	} else if !strings.Contains(err.Error(), "coordination scope") {
+		t.Fatalf("unexpected overlap error: %v", err)
+	}
+}
+
+func TestFinishAllowsClaimedCoordinationPaths(t *testing.T) {
+	repoRoot := initRepo(t)
+	runtime := newTestRuntime(t, repoRoot)
+	docker := &fakeDocker{runningProjects: map[string]bool{}}
+	service := NewForTesting(runtime, gitops.New(repoRoot), docker)
+	service.newRunID = func() string { return "20260318-000018-4444" }
+
+	meta, err := service.Create(CreateOptions{
+		OwnedPaths:        []string{"pkg"},
+		CoordinationPaths: []string{"go.mod"},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(meta.WorktreePath, "pkg"), 0o755); err != nil {
+		t.Fatalf("mkdir owned path: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(meta.WorktreePath, "pkg", "worker.txt"), []byte("worker\n"), 0o644); err != nil {
+		t.Fatalf("write owned file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(meta.WorktreePath, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
+		t.Fatalf("write coordination file: %v", err)
+	}
+
+	result, err := service.Finish(FinishOptions{RunID: meta.ID, Status: RunCompletionStatusReady})
+	if err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+	if len(result.TouchedPaths) != 2 {
+		t.Fatalf("unexpected touched paths: %+v", result.TouchedPaths)
+	}
+}
+
 func TestCreateRejectsUnknownBundledComposeAsset(t *testing.T) {
 	repoRoot := initRepo(t)
 	configPath := filepath.Join(repoRoot, ".alcatraz.json")
@@ -570,6 +872,7 @@ func newTestRuntime(t *testing.T, repoRoot string) *rtpkg.Runtime {
 		RepoRoot: repoRoot,
 		Environ: []string{
 			"ALCATRAZ_CONTAINER_RUNTIME=runc",
+			"ALCATRAZ_EGRESS_PROXY_RUNTIME=runc",
 			"OPENAI_API_KEY=test-key",
 			"HOST_CODEX_BIN=/bin/sh",
 			"HOME=" + repoRoot,
@@ -640,4 +943,16 @@ func runCmd(t *testing.T, dir string, name string, args ...string) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v failed: %v\n%s", name, args, err, output)
 	}
+}
+
+func currentBranch(t *testing.T, dir string) string {
+	t.Helper()
+
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git branch --show-current failed: %v\n%s", err, output)
+	}
+	return strings.TrimSpace(string(output))
 }

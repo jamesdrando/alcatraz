@@ -18,6 +18,10 @@ type runOptions struct {
 	ConfigPath         string
 	BaseRef            string
 	BranchName         string
+	MergeTarget        string
+	ClaimMode          string
+	OwnedPaths         string
+	CoordinationPaths  string
 	AllowDirty         bool
 	DependencyProfiles string
 	AptPackages        string
@@ -35,6 +39,10 @@ func handleRun(args []string) error {
 	fs.StringVar(&opts.ConfigPath, "config", "", "Path to a JSON config file")
 	fs.StringVar(&opts.BaseRef, "base-ref", "", "Base ref to branch from")
 	fs.StringVar(&opts.BranchName, "branch", "", "Explicit branch name")
+	fs.StringVar(&opts.MergeTarget, "merge-target", "", "Explicit branch to integrate the run back into later")
+	fs.StringVar(&opts.ClaimMode, "claim-mode", "", "Path-claim mode for owned paths: exclusive or shared")
+	fs.StringVar(&opts.OwnedPaths, "owned-paths", "", "Comma-separated repo-relative paths this run is allowed to change")
+	fs.StringVar(&opts.CoordinationPaths, "coordination-paths", "", "Comma-separated repo-relative paths reserved as globally coordinated resources for this run")
 	fs.BoolVar(&opts.AllowDirty, "allow-dirty", false, "Allow starting from a dirty checkout")
 	fs.StringVar(&opts.DependencyProfiles, "deps", "", "Comma-separated dependency profiles to bake into the agent image")
 	fs.StringVar(&opts.AptPackages, "apt-packages", "", "Comma-separated extra apt packages to bake into the agent image")
@@ -61,9 +69,13 @@ func handleRun(args []string) error {
 	service := runs.New(runtime)
 
 	meta, err := service.Create(runs.CreateOptions{
-		BaseRef:    opts.BaseRef,
-		BranchName: opts.BranchName,
-		AllowDirty: opts.AllowDirty,
+		BaseRef:           opts.BaseRef,
+		BranchName:        opts.BranchName,
+		MergeTarget:       opts.MergeTarget,
+		ClaimMode:         runs.RunClaimMode(strings.TrimSpace(opts.ClaimMode)),
+		OwnedPaths:        splitList(opts.OwnedPaths),
+		CoordinationPaths: splitList(opts.CoordinationPaths),
+		AllowDirty:        opts.AllowDirty,
 	})
 	if err != nil {
 		return err

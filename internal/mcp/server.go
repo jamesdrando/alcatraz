@@ -54,15 +54,24 @@ type toolCallParams struct {
 }
 
 type runToolInput struct {
-	ConfigPath     string   `json:"config_path,omitempty"`
-	BaseRef        string   `json:"base_ref,omitempty"`
-	BranchName     string   `json:"branch_name,omitempty"`
-	AllowDirty     bool     `json:"allow_dirty,omitempty"`
-	ExtraAgentArgs []string `json:"extra_agent_args,omitempty"`
+	ConfigPath        string            `json:"config_path,omitempty"`
+	BaseRef           string            `json:"base_ref,omitempty"`
+	BranchName        string            `json:"branch_name,omitempty"`
+	MergeTarget       string            `json:"merge_target,omitempty"`
+	ClaimMode         runs.RunClaimMode `json:"claim_mode,omitempty"`
+	OwnedPaths        []string          `json:"owned_paths,omitempty"`
+	CoordinationPaths []string          `json:"coordination_paths,omitempty"`
+	AllowDirty        bool              `json:"allow_dirty,omitempty"`
+	ExtraAgentArgs    []string          `json:"extra_agent_args,omitempty"`
 }
 
 type getConfigInput struct {
 	ConfigPath string `json:"config_path,omitempty"`
+}
+
+type diffRunInput struct {
+	RunID string `json:"run_id"`
+	Stat  bool   `json:"stat,omitempty"`
 }
 
 type getRunInput struct {
@@ -78,12 +87,31 @@ type cleanAllInput struct {
 	DeleteBranch bool `json:"delete_branch,omitempty"`
 }
 
+type finishRunInput struct {
+	RunID              string                   `json:"run_id"`
+	CommitMessage      string                   `json:"commit_message,omitempty"`
+	Status             runs.RunCompletionStatus `json:"status,omitempty"`
+	Summary            string                   `json:"summary,omitempty"`
+	NeedsChanges       []runs.ChangeRequest     `json:"needs_changes,omitempty"`
+	Assumptions        []string                 `json:"assumptions,omitempty"`
+	SuggestedFollowups []string                 `json:"suggested_followups,omitempty"`
+	Merge              bool                     `json:"merge,omitempty"`
+	MergeInto          string                   `json:"merge_into,omitempty"`
+	Clean              bool                     `json:"clean,omitempty"`
+	DeleteBranch       bool                     `json:"delete_branch,omitempty"`
+}
+
 type runToolResult struct {
-	RunID          string         `json:"run_id"`
-	BranchName     string         `json:"branch_name"`
-	WorktreePath   string         `json:"worktree_path"`
-	ComposeProject string         `json:"compose_project"`
-	AuthMode       rtpkg.AuthMode `json:"auth_mode"`
+	RunID             string            `json:"run_id"`
+	BranchName        string            `json:"branch_name"`
+	BaseCommit        string            `json:"base_commit"`
+	MergeTarget       string            `json:"merge_target"`
+	ClaimMode         runs.RunClaimMode `json:"claim_mode"`
+	OwnedPaths        []string          `json:"owned_paths,omitempty"`
+	CoordinationPaths []string          `json:"coordination_paths,omitempty"`
+	WorktreePath      string            `json:"worktree_path"`
+	ComposeProject    string            `json:"compose_project"`
+	AuthMode          rtpkg.AuthMode    `json:"auth_mode"`
 }
 
 func New(name, version string) *Server {
@@ -192,9 +220,13 @@ func (s *Server) handleToolCall(raw json.RawMessage) (map[string]any, error) {
 		}
 		svc := runs.New(rt)
 		meta, err := svc.Create(runs.CreateOptions{
-			BaseRef:    input.BaseRef,
-			BranchName: input.BranchName,
-			AllowDirty: input.AllowDirty,
+			BaseRef:           input.BaseRef,
+			BranchName:        input.BranchName,
+			MergeTarget:       input.MergeTarget,
+			ClaimMode:         input.ClaimMode,
+			OwnedPaths:        input.OwnedPaths,
+			CoordinationPaths: input.CoordinationPaths,
+			AllowDirty:        input.AllowDirty,
 		})
 		if err != nil {
 			return toolError(err.Error()), nil
@@ -203,12 +235,32 @@ func (s *Server) handleToolCall(raw json.RawMessage) (map[string]any, error) {
 			return toolError(fmt.Sprintf("failed to start run %s: %s", meta.ID, err)), nil
 		}
 		return toolSuccess(runToolResult{
-			RunID:          meta.ID,
-			BranchName:     meta.BranchName,
-			WorktreePath:   meta.WorktreePath,
-			ComposeProject: meta.ComposeProject,
-			AuthMode:       meta.AuthMode,
+			RunID:             meta.ID,
+			BranchName:        meta.BranchName,
+			BaseCommit:        meta.BaseCommit,
+			MergeTarget:       meta.MergeTarget,
+			ClaimMode:         meta.ClaimMode,
+			OwnedPaths:        meta.OwnedPaths,
+			CoordinationPaths: meta.CoordinationPaths,
+			WorktreePath:      meta.WorktreePath,
+			ComposeProject:    meta.ComposeProject,
+			AuthMode:          meta.AuthMode,
 		}), nil
+	case "alcatraz_diff_run":
+		var input diffRunInput
+		if err := decodeToolArgs(params.Arguments, &input); err != nil {
+			return nil, err
+		}
+		rt, err := rtpkg.Open(rtpkg.OpenOptions{})
+		if err != nil {
+			return toolError(err.Error()), nil
+		}
+		svc := runs.New(rt)
+		diff, err := svc.Diff(input.RunID, input.Stat)
+		if err != nil {
+			return toolError(err.Error()), nil
+		}
+		return toolSuccess(map[string]any{"diff": diff}), nil
 	case "alcatraz_list_runs":
 		rt, err := rtpkg.Open(rtpkg.OpenOptions{})
 		if err != nil {
@@ -276,6 +328,33 @@ func (s *Server) handleToolCall(raw json.RawMessage) (map[string]any, error) {
 		}
 		svc := runs.New(rt)
 		return toolSuccess(svc.EffectiveConfig()), nil
+	case "alcatraz_finish_run":
+		var input finishRunInput
+		if err := decodeToolArgs(params.Arguments, &input); err != nil {
+			return nil, err
+		}
+		rt, err := rtpkg.Open(rtpkg.OpenOptions{})
+		if err != nil {
+			return toolError(err.Error()), nil
+		}
+		svc := runs.New(rt)
+		result, err := svc.Finish(runs.FinishOptions{
+			RunID:         input.RunID,
+			CommitMessage: input.CommitMessage,
+			Status:        input.Status,
+			Summary:       input.Summary,
+			NeedsChanges:  input.NeedsChanges,
+			Assumptions:   input.Assumptions,
+			Followups:     input.SuggestedFollowups,
+			Merge:         input.Merge,
+			MergeInto:     input.MergeInto,
+			Clean:         input.Clean,
+			DeleteBranch:  input.DeleteBranch,
+		})
+		if err != nil {
+			return toolError(err.Error()), nil
+		}
+		return toolSuccess(result), nil
 	default:
 		return toolError("unknown tool: " + params.Name), nil
 	}
@@ -289,15 +368,44 @@ func (s *Server) tools() []toolDefinition {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"config_path": map[string]any{"type": "string"},
-					"base_ref":    map[string]any{"type": "string"},
-					"branch_name": map[string]any{"type": "string"},
+					"config_path":  map[string]any{"type": "string"},
+					"base_ref":     map[string]any{"type": "string"},
+					"branch_name":  map[string]any{"type": "string"},
+					"merge_target": map[string]any{"type": "string"},
+					"claim_mode": map[string]any{
+						"type": "string",
+						"enum": []string{
+							string(runs.RunClaimModeExclusive),
+							string(runs.RunClaimModeShared),
+						},
+					},
+					"owned_paths": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "string"},
+					},
+					"coordination_paths": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "string"},
+					},
 					"allow_dirty": map[string]any{"type": "boolean"},
 					"extra_agent_args": map[string]any{
 						"type":  "array",
 						"items": map[string]any{"type": "string"},
 					},
 				},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Name:        "alcatraz_diff_run",
+			Description: "Return the current diff for one run, using the run's recorded base commit.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"run_id": map[string]any{"type": "string"},
+					"stat":   map[string]any{"type": "boolean"},
+				},
+				"required":             []string{"run_id"},
 				"additionalProperties": false,
 			},
 		},
@@ -343,6 +451,53 @@ func (s *Server) tools() []toolDefinition {
 				"properties": map[string]any{
 					"delete_branch": map[string]any{"type": "boolean"},
 				},
+				"additionalProperties": false,
+			},
+		},
+		{
+			Name:        "alcatraz_finish_run",
+			Description: "Commit a run, optionally record structured completion state, optionally merge into the run's merge target, and optionally clean it up.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"run_id":         map[string]any{"type": "string"},
+					"commit_message": map[string]any{"type": "string"},
+					"status": map[string]any{
+						"type": "string",
+						"enum": []string{
+							string(runs.RunCompletionStatusReady),
+							string(runs.RunCompletionStatusBlocked),
+							string(runs.RunCompletionStatusReadyWithAssumptions),
+						},
+					},
+					"summary": map[string]any{"type": "string"},
+					"needs_changes": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"path":        map[string]any{"type": "string"},
+								"description": map[string]any{"type": "string"},
+								"blocking":    map[string]any{"type": "boolean"},
+							},
+							"required":             []string{"description"},
+							"additionalProperties": false,
+						},
+					},
+					"assumptions": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "string"},
+					},
+					"suggested_followups": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "string"},
+					},
+					"merge":         map[string]any{"type": "boolean"},
+					"merge_into":    map[string]any{"type": "string"},
+					"clean":         map[string]any{"type": "boolean"},
+					"delete_branch": map[string]any{"type": "boolean"},
+				},
+				"required":             []string{"run_id"},
 				"additionalProperties": false,
 			},
 		},

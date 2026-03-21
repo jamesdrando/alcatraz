@@ -59,6 +59,22 @@ func (c *Client) BranchExists(branchName string) (bool, error) {
 	return commandSucceededInDir(c.RepoRoot, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
 }
 
+func (c *Client) ResolveCommit(dir, ref string) (string, error) {
+	out, err := execInDir(dir, "git", "rev-parse", ref+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (c *Client) MergeBase(left, right string) (string, error) {
+	out, err := execInDir(c.RepoRoot, "git", "merge-base", left, right)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
 func (c *Client) CreateWorktree(worktreePath, branchName, baseRef string) error {
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return err
@@ -151,7 +167,30 @@ func (c *Client) MergeIntoCurrent(dir, branchName string) error {
 	return nil
 }
 
-func (c *Client) Diff(worktreePath, baseRef, branchName string, stat bool) (string, error) {
+func (c *Client) ChangedPaths(baseCommit, ref string) ([]string, error) {
+	out, err := execInDir(c.RepoRoot, "git", "diff", "--name-only", "--no-renames", baseCommit+".."+ref)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(out, "\n")
+	paths := make([]string, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if _, ok := seen[line]; ok {
+			continue
+		}
+		seen[line] = struct{}{}
+		paths = append(paths, line)
+	}
+	return paths, nil
+}
+
+func (c *Client) Diff(worktreePath, baseCommit, branchName string, stat bool) (string, error) {
 	dirty, err := c.WorktreeDirty(worktreePath)
 	if err != nil {
 		return "", err
@@ -168,7 +207,7 @@ func (c *Client) Diff(worktreePath, baseRef, branchName string, stat bool) (stri
 	if stat {
 		args = append(args, "--stat")
 	}
-	args = append(args, baseRef+"..."+branchName)
+	args = append(args, baseCommit+".."+branchName)
 	return execInDir(c.RepoRoot, args[0], args[1:]...)
 }
 
