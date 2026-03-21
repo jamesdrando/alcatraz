@@ -4,7 +4,7 @@
   "default_base_ref": "HEAD",
   "allow_dirty": false,
   "env_file": ".env",
-  "agent_command": [
+  "harness_command": [
     "codex",
     "--dangerously-bypass-approvals-and-sandbox",
     "-C",

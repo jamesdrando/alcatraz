@@ -17,6 +17,11 @@ type bundledAsset struct {
 	Mode fs.FileMode
 }
 
+type InitTemplate struct {
+	Path string
+	Mode fs.FileMode
+}
+
 var bundledAssets = []bundledAsset{
 	{Path: "compose.yaml", Mode: 0o644},
 	{Path: "compose.codex.yaml", Mode: 0o644},
@@ -34,7 +39,12 @@ var composeAssets = map[string]struct{}{
 	"compose.chatgpt.yaml": {},
 }
 
-//go:embed compose.yaml compose.codex.yaml compose.chatgpt.yaml docker/agent/Dockerfile docker/agent/docker-entrypoint.sh docker/egress-proxy/Dockerfile docker/egress-proxy/docker-entrypoint.sh docker/egress-proxy/squid.conf
+var initTemplates = []InitTemplate{
+	{Path: "templates/init/skills/alcatraz-orchestrator/SKILL.md", Mode: 0o644},
+	{Path: "templates/init/skills/alcatraz-worker/SKILL.md", Mode: 0o644},
+}
+
+//go:embed compose.yaml compose.codex.yaml compose.chatgpt.yaml docker/agent/Dockerfile docker/agent/docker-entrypoint.sh docker/egress-proxy/Dockerfile docker/egress-proxy/docker-entrypoint.sh docker/egress-proxy/squid.conf templates/init/skills/alcatraz-orchestrator/SKILL.md templates/init/skills/alcatraz-worker/SKILL.md
 var bundledFS embed.FS
 
 func Materialize(stateDir string) (string, error) {
@@ -69,6 +79,16 @@ func ResolveComposeFile(root, name string) (string, error) {
 		return "", fmt.Errorf("unsupported bundled compose asset: %s", name)
 	}
 	return filepath.Join(root, name), nil
+}
+
+func InitTemplateFiles() []InitTemplate {
+	out := make([]InitTemplate, len(initTemplates))
+	copy(out, initTemplates)
+	return out
+}
+
+func ReadInitTemplate(path string) ([]byte, error) {
+	return bundledFS.ReadFile(path)
 }
 
 func writeBundledFile(path string, data []byte, mode fs.FileMode) error {

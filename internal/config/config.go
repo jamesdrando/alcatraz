@@ -14,9 +14,10 @@ type Config struct {
 	DefaultBaseRef       string   `json:"default_base_ref"`
 	AllowDirty           bool     `json:"allow_dirty"`
 	EnvFile              string   `json:"env_file"`
-	ComposeFiles         []string `json:"compose_files"`
-	ChatGPTComposeFile   string   `json:"chatgpt_compose_file"`
-	AgentCommand         []string `json:"agent_command"`
+	ComposeFiles         []string `json:"compose_files,omitempty"`
+	ChatGPTComposeFile   string   `json:"chatgpt_compose_file,omitempty"`
+	HarnessCommand       []string `json:"harness_command,omitempty"`
+	AgentCommand         []string `json:"agent_command,omitempty"`
 	DependencyProfiles   []string `json:"dependency_profiles"`
 	AptPackages          []string `json:"apt_packages"`
 	NodePackages         []string `json:"node_packages"`
@@ -33,7 +34,7 @@ func Default() Config {
 		EnvFile:              ".env",
 		ComposeFiles:         []string{"compose.yaml", "compose.codex.yaml"},
 		ChatGPTComposeFile:   "compose.chatgpt.yaml",
-		AgentCommand:         []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "-C", "/workspace"},
+		HarnessCommand:       []string{"codex", "--dangerously-bypass-approvals-and-sandbox", "-C", "/workspace"},
 		DependencyProfiles:   []string{},
 		AptPackages:          []string{},
 		NodePackages:         []string{},
@@ -50,6 +51,7 @@ func Load(repoRoot, explicitPath string) (Config, error) {
 		return Config{}, err
 	}
 	if path == "" {
+		applyDefaults(&cfg)
 		return cfg, nil
 	}
 
@@ -95,8 +97,8 @@ func applyDefaults(cfg *Config) {
 	if len(cfg.ComposeFiles) == 0 {
 		cfg.ComposeFiles = defaults.ComposeFiles
 	}
-	if len(cfg.AgentCommand) == 0 {
-		cfg.AgentCommand = defaults.AgentCommand
+	if cfg.ChatGPTComposeFile == "" {
+		cfg.ChatGPTComposeFile = defaults.ChatGPTComposeFile
 	}
 	if cfg.BranchPrefix == "" {
 		cfg.BranchPrefix = defaults.BranchPrefix
@@ -110,7 +112,13 @@ func applyDefaults(cfg *Config) {
 	if cfg.EnvFile == "" {
 		cfg.EnvFile = defaults.EnvFile
 	}
-	if cfg.ChatGPTComposeFile == "" {
-		cfg.ChatGPTComposeFile = defaults.ChatGPTComposeFile
+	if len(cfg.HarnessCommand) == 0 && len(cfg.AgentCommand) == 0 {
+		cfg.HarnessCommand = append([]string{}, defaults.HarnessCommand...)
+	}
+	if len(cfg.HarnessCommand) == 0 && len(cfg.AgentCommand) > 0 {
+		cfg.HarnessCommand = append([]string{}, cfg.AgentCommand...)
+	}
+	if len(cfg.AgentCommand) == 0 && len(cfg.HarnessCommand) > 0 {
+		cfg.AgentCommand = append([]string{}, cfg.HarnessCommand...)
 	}
 }

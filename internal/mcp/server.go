@@ -364,7 +364,7 @@ func (s *Server) tools() []toolDefinition {
 	return []toolDefinition{
 		{
 			Name:        "alcatraz_run",
-			Description: "Create an isolated Alcatraz run, start its compose project on the host, and optionally execute the configured agent command inside the run container.",
+			Description: "Create an isolated Alcatraz run, start its compose project on the host, and optionally execute the configured harness command inside the run container.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

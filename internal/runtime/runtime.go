@@ -331,6 +331,10 @@ func (r *Runtime) bootstrapEnvFileContents() (string, bool) {
 		lines = append(lines, "OPENAI_API_KEY="+dotenvValue(value))
 		hasValues = true
 	}
+	if value := strings.TrimSpace(r.Env["OPENAI_BASE_URL"]); value != "" {
+		lines = append(lines, "OPENAI_BASE_URL="+dotenvValue(value))
+		hasValues = true
+	}
 
 	if value := strings.TrimSpace(r.Env["HOST_CODEX_HOME"]); value != "" {
 		lines = append(lines, "HOST_CODEX_HOME="+dotenvValue(value))

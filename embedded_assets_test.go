@@ -75,3 +75,20 @@ func TestAgentEntrypointSeedsWorkspaceTrust(t *testing.T) {
 		t.Fatalf("expected agent entrypoint to seed workspace trust")
 	}
 }
+
+func TestInitTemplatesAreEmbedded(t *testing.T) {
+	paths := []string{
+		"templates/init/skills/alcatraz-orchestrator/SKILL.md",
+		"templates/init/skills/alcatraz-worker/SKILL.md",
+	}
+
+	for _, path := range paths {
+		data, err := bundledFS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if len(data) == 0 {
+			t.Fatalf("expected embedded data for %s", path)
+		}
+	}
+}
